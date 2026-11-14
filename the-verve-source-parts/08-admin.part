@@ -1,0 +1,346 @@
+<script>
+/* ============================================================
+   ADMIN DASHBOARD — secure (demo) console
+   ============================================================ */
+const ADMIN_FLOW = ['Order Placed','Payment Confirmed','Processing','Packed','Shipped','Out for Delivery','Delivered','Cancelled','Returned','Refunded'];
+
+async function renderAdmin(parsed){
+  const u = currentUser();
+  if (!u || u.role!=='admin'){
+    return '<div class="adm-login"><div class="box">'+
+      '<div class="center" style="margin-bottom:1.4rem"><div style="font-family:var(--serif);letter-spacing:.3em;font-size:22px">THE VERVE</div><div style="font-size:9px;letter-spacing:.4em;color:var(--burgundy)">ADMIN CONSOLE</div></div>'+
+      '<form data-form="admin-login">'+
+      '<div class="field"><label>Email</label><input name="email" type="email" required value=""></div>'+
+      '<div class="field"><label>Password</label><input name="pass" type="password" required></div>'+
+      '<button class="btn btn-solid btn-block">SIGN IN</button></form>'+
+      '<div class="demo-cred">Demo credentials: <b>admin@theverve.in</b> / <b>Verve@Admin2026</b> — production builds use Supabase Auth with role-based policies.</div>'+
+      '<a class="mini-link" href="#/" style="display:block;text-align:center;margin-top:1.2rem">← Back to storefront</a></div></div>';
+  }
+  const sec = parsed.params[0] || 'dashboard';
+  const nav = [
+    ['dashboard','Dashboard',[]],['orders','Orders',[]],['products','Products',[]],['customers','Customers',[]],
+    ['coupons','Coupons',[]],['marketing','Marketing',[ (DB.returns.filter(r=>r.status==='Requested')).length ]],
+    ['content','Content',[]],['settings','Settings',[]],['diagnostics','Diagnostics',[]]
+  ].map(n=>{
+    const badge = n[2][0]? '<span class="n-badge">'+n[2][0]+'</span>':'';
+    return '<a href="#/admin'+(n[0]==='dashboard'?'':'/'+n[0])+'" class="'+(sec===n[0]?'on':'')+'"><span>'+n[1]+'</span>'+badge+'</a>';
+  }).join('');
+  const pendingReturns = DB.returns.filter(r=>r.status==='Requested').length;
+  return '<div class="adm"><aside class="adm-side">'+
+    '<a class="wm" href="#/" style="color:inherit"><img class="wm-img" src="'+LOGO.ivory+'" alt="THE VERVE logo" draggable="false"><small>ADMIN CONSOLE</small></a>'+
+    '<div class="grp">Overview</div>'+nav+
+    '<div class="grp">Session</div>'+
+    '<a href="#" data-action="logout">Log out ('+esc(u.name)+')</a>'+
+    '<a href="#/">View storefront ↗</a>'+
+  '</aside><main class="adm-main" id="adm-main">'+(ADM[sec]? ADM[sec]() : ADM.dashboard())+'</main></div>';
+}
+
+const ADM = {};
+ADM.dashboard = function(){
+  const orders = DB.orders;
+  const paid = orders.filter(o=>!['Cancelled'].includes(o.status));
+  const revenue = paid.reduce((s,o)=>s+o.total,0);
+  const aov = paid.length? revenue/paid.length : 0;
+  const customers = DB.users.filter(x=>x.role==='customer').length;
+  // monthly revenue last 6 months
+  const months = [];
+  for (let i=5;i>=0;i--){ const d=new Date(); d.setMonth(d.getMonth()-i); months.push({ key:d.toISOString().slice(0,7), label:d.toLocaleString('en-IN',{month:'short'}), rev:0, n:0 }); }
+  orders.forEach(o=>{ const m = months.find(x=>x.key===o.createdAt.slice(0,7)); if (m && !['Cancelled'].includes(o.status)){ m.rev+=o.total; m.n++; } });
+  const maxR = Math.max(...months.map(m=>m.rev),1);
+  const W=680,H=220,bw=64,gap=(W-6*bw)/7;
+  const bars = months.map((m,i)=>{
+    const h = Math.max(4, (m.rev/maxR)*(H-60));
+    const x = gap + i*(bw+gap);
+    return '<rect x="'+x+'" y="'+(H-34-h)+'" width="'+bw+'" height="'+h+'" fill="'+(i===5?'#651B2B':'#D6BD96')+'"></rect>'+
+      '<text x="'+(x+bw/2)+'" y="'+(H-40-h)+'" text-anchor="middle" font-size="11" fill="#24140F">'+(m.rev? '₹'+Math.round(m.rev/1000)+'k':'')+'</text>'+
+      '<text x="'+(x+bw/2)+'" y="'+(H-14)+'" text-anchor="middle" font-size="11" fill="#7C7166">'+m.label+'</text>';
+  }).join('');
+  // best sellers by units
+  const units = {};
+  orders.forEach(o=>o.items.forEach(i=>{ units[i.pid]=(units[i.pid]||0)+i.qty; }));
+  const best = Object.entries(units).sort((a,b)=>b[1]-a[1]).slice(0,5)
+    .map(([pid,n])=>{ const p=DB.products.find(x=>x.id===pid); return p? '<div class="lowstock"><span>'+esc(p.name)+'</span><b>'+n+' sold</b></div>':''; }).join('');
+  const low = Object.entries(DB.inventory).filter(([k,v])=>v>0&&v<=3).slice(0,8)
+    .map(([k,v])=>{ const [pid,c,s]=k.split('::'); const p=DB.products.find(x=>x.id===pid);
+      return p? '<div class="lowstock"><span>'+esc(p.name)+' — '+esc(c)+' / '+esc(s)+'</span><b style="color:var(--burgundy)">'+v+' left</b></div>':''; }).join('');
+  const recent = orders.slice(0,6).map(o=>'<tr><td><a href="#/invoice/'+o.no+'" style="border-bottom:1px solid var(--line-2)">'+esc(o.no)+'</a></td><td>'+esc(o.name)+'</td><td class="mono-nums">'+fmt(o.total)+'</td><td><span class="pill '+(o.status==='Delivered'?'pl-green':['Cancelled','Returned','Refunded'].includes(o.status)?'pl-red':'pl-gold')+'">'+esc(o.status)+'</span></td><td>'+timeAgo(o.createdAt)+'</td></tr>').join('');
+  const pendingReturns = DB.returns.filter(r=>r.status==='Requested');
+  return '<div class="adm-top"><h1>Dashboard</h1><div class="who">'+esc(DB.emails.length)+' emails sent · <span class="badge b-line">DEMO DATA</span></div></div>'+
+  '<div class="kpis">'+
+    '<div class="kpi"><div class="l">Total revenue</div><div class="v mono-nums">'+fmt(revenue)+'</div><div class="s">'+paid.length+' orders counted</div></div>'+
+    '<div class="kpi"><div class="l">Total orders</div><div class="v">'+orders.length+'</div><div class="s">'+DB.returns.filter(r=>r.type==='return').length+' returns requested</div></div>'+
+    '<div class="kpi"><div class="l">Average order value</div><div class="v mono-nums">'+fmt(aov)+'</div><div class="s">Prepaid + COD</div></div>'+
+    '<div class="kpi"><div class="l">Customers</div><div class="v">'+customers+'</div><div class="s">'+DB.subscribers.length+' newsletter subscribers</div></div>'+
+  '</div>'+
+  '<div class="adm-2col">'+
+    '<div class="adm-card chart-wrap"><h3>Monthly sales — last 6 months</h3><svg viewBox="0 0 '+W+' '+H+'" role="img" aria-label="Monthly sales chart">'+bars+'</svg></div>'+
+    '<div class="adm-card"><h3>Low stock (≤ 3 left)</h3>'+(low||'<p style="font-size:12px;color:var(--muted)">No low-stock variants.</p>')+'</div>'+
+  '</div>'+
+  '<div class="adm-2col">'+
+    '<div class="adm-card"><h3>Best sellers</h3>'+(best||'<p style="font-size:12px;color:var(--muted)">No sales yet.</p>')+'</div>'+
+    '<div class="adm-card"><h3>Recent orders</h3><table class="tbl"><thead><tr><th>Order</th><th>Customer</th><th>Total</th><th>Status</th><th></th></tr></thead><tbody>'+recent+'</tbody></table></div>'+
+  '</div>'+
+  (pendingReturns.length? '<div class="adm-card"><h3>Open cancellation / return requests ('+pendingReturns.length+')</h3>'+pendingReturns.map(r=>'<div class="lowstock"><span><b>'+r.type.toUpperCase()+'</b> · '+esc(r.orderNo)+' — '+esc(r.reason||'No reason given')+'</span><span><button class="btn btn-line btn-sm" data-action="adm-req-approve" data-id="'+r.id+'">APPROVE</button> <button class="btn btn-line btn-sm" data-action="adm-req-decline" data-id="'+r.id+'">DECLINE</button></span></div>').join('')+'</div>':'');
+};
+
+/* ---------- PRODUCTS ---------- */
+ADM.products = function(){
+  const q = CURRENT_ROUTE.query||{};
+  const search = (q.q||'').toLowerCase();
+  const list = DB.products.filter(p=>!search || (p.name+p.sku+p.category).toLowerCase().includes(search));
+  const rows = list.map(p=>{
+    const stock = totalStock(p);
+    return '<tr><td>'+imgTag(p.images[0],p.name,'thumb')+'</td>'+
+      '<td><b style="font-weight:500">'+esc(p.name)+'</b><br><span style="color:var(--muted);font-size:11px">'+esc(p.sku)+' · '+esc(catName(p.category))+'</span></td>'+
+      '<td class="mono-nums">'+fmt(p.price)+'<br><span style="color:var(--muted);text-decoration:line-through;font-size:11px">'+fmt(p.mrp)+'</span></td>'+
+      '<td class="mono-nums">'+stock+'</td>'+
+      '<td>'+(p.tags.includes('limited')?'<span class="badge b-dark">Limited</span> ':'')+(p.tags.includes('new')?'<span class="badge b-burgundy">New</span> ':'')+(p.tags.includes('bestseller')?'<span class="badge b-gold">Bestseller</span>':'')+'</td>'+
+      '<td><button class="tgl'+(p.published?' on':'')+'" data-action="adm-pub" data-pid="'+p.id+'" aria-label="Publish toggle"></button></td>'+
+      '<td style="white-space:nowrap"><button class="btn btn-line btn-sm" data-action="adm-edit" data-pid="'+p.id+'">EDIT</button> <button class="mini-link danger" data-action="adm-del" data-pid="'+p.id+'">DELETE</button></td></tr>';
+  }).join('');
+  return '<div class="adm-top"><h1>Products</h1><div style="display:flex;gap:.8rem"><form data-form="adm-search" style="display:flex"><input name="q" class="inp" placeholder="Search products…" value="'+esc(q.q||'')+'"><button class="btn btn-line btn-sm">SEARCH</button></form><button class="btn btn-solid btn-sm" data-action="adm-edit" data-pid="new">+ ADD PRODUCT</button></div></div>'+
+  '<div class="adm-card"><table class="tbl"><thead><tr><th></th><th>Product</th><th>Price / MRP</th><th>Stock</th><th>Tags</th><th>Live</th><th></th></tr></thead><tbody>'+(rows||'<tr><td colspan="7" style="color:var(--muted)">No products match.</td></tr>')+'</tbody></table></div>';
+};
+ADM.editProduct = null;
+function productFormHtml(p){
+  p = p || { name:'', slug:'', sku:'', category:'oversized-t-shirts', tags:[], fit:'Oversized', gsm:240, material:'', price:999, mrp:1499, description:'', care:[], colors:[{name:'Ivory',hex:'#E9E0CE'}], images:['','',''], sizes:['XS','S','M','L','XL','XXL'], published:true, demo:false, id:null };
+  const invRows = p.colors.length && p.sizes.length ? p.colors.map(c=>'<tr><td>'+esc(c.name)+'</td>'+p.sizes.map(s=>'<td style="text-align:center"><input class="inp" style="width:56px;padding:.3rem;text-align:center" type="number" min="0" data-inv="'+esc(p.id||'NEW')+'::'+esc(c.name)+'::'+esc(s)+'" value="'+(p.id? stockOf(p.id,c.name,s):10)+'"></td>').join('')+'</tr>').join('') : '<tr><td colspan="7" style="color:var(--muted);font-size:12px">Set colours and sizes, save once, then stock each variant here.</td></tr>';
+  return '<form data-form="adm-product" data-pid="'+(p.id||'new')+'">'+
+    '<div class="frow"><div class="field"><label>Product name</label><input name="name" value="'+esc(p.name)+'" required></div>'+
+    '<div class="field"><label>SKU</label><input name="sku" value="'+esc(p.sku||'')+'"></div></div>'+
+    '<div class="frow"><div class="field"><label>Category</label><select name="category" class="inp">'+DB.categories.map(c=>'<option value="'+c.slug+'"'+(p.category===c.slug?' selected':'')+'>'+esc(c.name)+'</option>').join('')+'</select></div>'+
+    '<div class="field"><label>Fit</label><select name="fit" class="inp">'+['Oversized','Regular','Relaxed','Boxy'].map(f=>'<option'+(p.fit===f?' selected':'')+'>'+f+'</option>').join('')+'</select></div></div>'+
+    '<div class="frow"><div class="field"><label>Price (₹)</label><input name="price" type="number" min="1" value="'+p.price+'" required></div>'+
+    '<div class="field"><label>Original MRP (₹)</label><input name="mrp" type="number" min="1" value="'+p.mrp+'" required></div></div>'+
+    '<div class="frow"><div class="field"><label>GSM</label><input name="gsm" type="number" value="'+(p.gsm||240)+'"></div>'+
+    '<div class="field"><label>Material</label><input name="material" value="'+esc(p.material||'')+'"></div></div>'+
+    '<div class="field"><label>Description</label><textarea name="description" rows="3" class="inp">'+esc(p.description||'')+'</textarea></div>'+
+    '<div class="field"><label>Care instructions (one per line)</label><textarea name="care" rows="3" class="inp">'+esc((p.care||[]).join('\n'))+'</textarea></div>'+
+    '<div class="field"><label>Product images — upload your own photos</label>'+
+      '<div id="pf-drop" class="pf-drop" data-action="pf-pick"><input type="file" id="pf-file" accept="image/*" multiple hidden>'+
+        '<div class="pf-drop-inner"><b>Drop product photos here</b><span>JPG · PNG · WEBP — auto-compressed, first image becomes the cover</span>'+
+        '<button type="button" class="btn btn-line btn-sm" data-action="pf-pick">CHOOSE FILES</button></div></div>'+
+      '<div id="pf-grid" class="pf-grid"></div>'+
+    '</div>'+
+    '<div class="frow"><div class="field"><label>Colours (Name:HEX, comma separated)</label><input name="colors" value="'+esc(p.colors.map(c=>c.name+':'+c.hex).join(', '))+'"></div>'+
+    '<div class="field"><label>Sizes (comma separated)</label><input name="sizes" value="'+esc(p.sizes.join(', '))+'"></div></div>'+
+    '<div class="field"><label>Tags</label><div style="display:flex;gap:1.2rem;font-size:12.5px">'+['new','featured','bestseller','limited'].map(t=>'<label style="display:flex;gap:.4rem;align-items:center"><input type="checkbox" name="tag-'+t+'" '+(p.tags&&p.tags.includes(t)?'checked':'')+' style="accent-color:var(--burgundy)"> '+t+'</label>').join('')+'</div></div>'+
+    '<label style="display:flex;gap:.7rem;align-items:center;font-size:13px;margin-bottom:1.2rem"><button type="button" class="tgl'+(p.published?' on':'')+'" data-action="adm-tgl-pub" id="pf-pub"></button> Published (visible on storefront)</label>'+
+    '<h3 style="font-size:12px;letter-spacing:.26em;margin-bottom:.8rem">INVENTORY PER VARIANT</h3>'+
+    '<table class="tbl" style="margin-bottom:1.4rem"><thead><tr><th>Colour</th>'+(p.sizes.map(s=>'<th style="text-align:center">'+esc(s)+'</th>').join(''))+'</tr></thead><tbody>'+invRows+'</tbody></table>'+
+    '<button class="btn btn-solid btn-block">SAVE PRODUCT</button></form>';
+}
+/* ---------- product image manager ---------- */
+ADM.pfImages = []; // working copy of the open product editor's images (URLs or compressed data URLs)
+function pfRenderGrid(){
+  const g = document.getElementById('pf-grid'); if (!g) return;
+  g.innerHTML = ADM.pfImages.length ? ADM.pfImages.map((src,i)=>
+    '<div class="pf-thumb'+(i===0?' cover':'')+'">'+
+      (i===0?'<span class="pf-badge">COVER</span>':'')+
+      '<img src="'+esc(src)+'" alt="Product image '+(i+1)+'">'+
+      '<div class="pf-acts">'+
+        (i>0?'<button type="button" title="Make cover image" data-action="pf-cover" data-i="'+i+'">★</button>':'')+
+        '<button type="button" title="Remove image" data-action="pf-remove" data-i="'+i+'">✕</button>'+
+      '</div></div>').join('')
+  : '<div class="pf-empty">No images yet — add photos above, or the storefront shows a branded placeholder.</div>';
+}
+function compressImage(file, MAX){
+  return new Promise((res,rej)=>{
+    const r = new FileReader();
+    r.onload = ()=>{
+      const img = new Image();
+      img.onload = ()=>{
+        MAX = MAX || 1100; // longest edge px — keeps each photo ≈80-150 KB in storage
+        const sc = Math.min(1, MAX/Math.max(img.width,img.height));
+        const c = document.createElement('canvas');
+        c.width = Math.max(1,Math.round(img.width*sc)); c.height = Math.max(1,Math.round(img.height*sc));
+        const x = c.getContext('2d');
+        x.fillStyle = '#fff'; x.fillRect(0,0,c.width,c.height); // flatten transparency onto white
+        x.drawImage(img,0,0,c.width,c.height);
+        res(c.toDataURL('image/jpeg',.78));
+      };
+      img.onerror = ()=>rej(new Error('decode')); img.src = r.result;
+    };
+    r.onerror = ()=>rej(new Error('read')); r.readAsDataURL(file);
+  });
+}
+async function pfAddFiles(files){
+  const list = Array.from(files||[]).filter(f=>/^image\//.test(f.type));
+  if (!list.length){ toast('Choose image files (JPG, PNG or WebP)', true); return; }
+  for (const f of list){
+    try { ADM.pfImages.push(await compressImage(f)); }
+    catch(err){ toast('Could not read '+f.name+' — try a JPG or PNG', true); }
+  }
+  pfRenderGrid();
+  const approxChars = JSON.stringify(DB).length + ADM.pfImages.join('').length;
+  if (approxChars > 4200000) toast('Browser storage is nearly full — remove a few photos before saving', true);
+}
+function wirePfDrop(){
+  const dz = document.getElementById('pf-drop'); if (!dz) return;
+  ['dragover','dragenter'].forEach(ev=>dz.addEventListener(ev,e=>{ e.preventDefault(); dz.classList.add('over'); }));
+  ['dragleave','dragend'].forEach(ev=>dz.addEventListener(ev,e=>{ e.preventDefault(); dz.classList.remove('over'); }));
+  dz.addEventListener('drop',e=>{
+    e.preventDefault(); dz.classList.remove('over');
+    if (e.dataTransfer && e.dataTransfer.files.length) pfAddFiles(e.dataTransfer.files);
+  });
+}
+function handleHeroFile(files){
+  const f = Array.from(files||[]).find(x=>/^image\//.test(x.type));
+  if (!f){ toast('Choose an image file (JPG, PNG or WebP)', true); return; }
+  compressImage(f,1600).then(durl=>{
+    const hi = document.querySelector('form[data-form="adm-hero"] input[name="image"]');
+    const th = document.getElementById('hero-thumb');
+    if (hi) hi.value = durl;
+    if (th) th.src = durl;
+    toast('Hero image ready — press SAVE HERO');
+  }).catch(()=>toast('Could not read that image — try a JPG or PNG', true));
+}
+function wireHeroDrop(){
+  /* wired via document-level delegation in 09-events (content page renders through the router) */
+}
+function openProductEditor(pid){
+  const p = pid==='new'? null : DB.products.find(x=>x.id===pid);
+  ADM.editProduct = p;
+  ADM.pfImages = (p && p.images ? p.images.filter(Boolean) : []).slice();
+  openModal('<h3>'+(p?'Edit — '+esc(p.name):'Add product')+'</h3><div class="sub">All fields update the live storefront instantly.</div>'+productFormHtml(p), true);
+  pfRenderGrid(); wirePfDrop();
+}
+
+/* ---------- ORDERS ---------- */
+ADM.orders = function(){
+  const q = CURRENT_ROUTE.query||{};
+  const search = (q.q||'').toLowerCase();
+  const stFilter = q.status||'';
+  let list = DB.orders.slice();
+  if (search) list = list.filter(o=>(o.no+o.name+o.email+o.phone).toLowerCase().includes(search));
+  if (stFilter) list = list.filter(o=>o.status===stFilter);
+  const pendingReturns = DB.returns.filter(r=>r.status==='Requested');
+  const rows = list.map(o=>'<tr>'+
+    '<td><b style="font-weight:500">'+esc(o.no)+'</b><br><span style="font-size:10.5px;color:var(--muted)">'+dTime(o.createdAt)+'</span></td>'+
+    '<td>'+esc(o.name)+'<br><span style="font-size:10.5px;color:var(--muted)">'+esc(o.email)+'</span><br><button class="mini-link" data-action="email-customer" data-email="'+esc(o.email)+'" data-no="'+esc(o.no)+'" style="font-size:10px">EMAIL</button></td>'+
+    '<td class="mono-nums">'+fmt(o.total)+'<br><span style="font-size:10px;color:var(--muted)">'+(o.payment.method==='razorpay'?'Prepaid · '+(o.payment.verified?'verified':'UNVERIFIED'):'COD')+'</span></td>'+
+    '<td><select class="sel" data-action="adm-status" data-no="'+o.no+'">'+ADMIN_FLOW.map(s=>'<option'+(o.status===s?' selected':'')+'>'+s+'</option>').join('')+'</select></td>'+
+    '<td><input class="inp" style="width:110px;padding:.35rem .5rem" value="'+esc(o.awb||'')+'" placeholder="AWB" data-action-blur="adm-awb" data-no="'+o.no+'"></td>'+
+    '<td style="white-space:nowrap"><a class="btn btn-line btn-sm" href="#/invoice/'+o.no+'">INVOICE</a></td></tr>').join('');
+  return '<div class="adm-top"><h1>Orders</h1><form data-form="adm-search" style="display:flex;gap:.8rem"><input name="q" class="inp" placeholder="Search order / customer…" value="'+esc(q.q||'')+'">'+
+    '<select class="sel" name="status"><option value="">All statuses</option>'+ADMIN_FLOW.map(s=>'<option'+(stFilter===s?' selected':'')+'>'+s+'</option>').join('')+'</select><button class="btn btn-line btn-sm">FILTER</button></form></div>'+
+  (pendingReturns.length? '<div class="adm-card" style="margin-bottom:1.2rem"><h3>Requests awaiting decision</h3>'+pendingReturns.map(r=>'<div class="lowstock"><span><b>'+r.type.toUpperCase()+'</b> · '+esc(r.orderNo)+' — '+esc(r.reason||'No reason given')+'</span><span><button class="btn btn-line btn-sm" data-action="adm-req-approve" data-id="'+r.id+'">APPROVE</button> <button class="btn btn-line btn-sm" data-action="adm-req-decline" data-id="'+r.id+'">DECLINE</button></span></div>').join('')+'</div>':'')+
+  '<div class="adm-card"><table class="tbl"><thead><tr><th>Order</th><th>Customer</th><th>Total</th><th>Status</th><th>AWB</th><th></th></tr></thead><tbody>'+(rows||'<tr><td colspan="6" style="color:var(--muted)">No orders match.</td></tr>')+'</tbody></table>'+
+  '<p style="font-size:11px;color:var(--muted);margin-top:1rem">Status changes append to the customer timeline and trigger a transactional email (simulated — Resend in production). Refunded triggers the refund workflow for prepaid orders.</p></div>';
+};
+
+/* ---------- CUSTOMERS ---------- */
+ADM.customers = function(){
+  const rows = DB.users.filter(x=>x.role==='customer').map(c=>{
+    const orders = DB.orders.filter(o=>o.email===c.email||(o.userId&&o.userId===c.id));
+    const spend = orders.filter(o=>!['Cancelled','Returned'].includes(o.status)).reduce((s,o)=>s+o.total,0);
+    return '<tr><td><b style="font-weight:500">'+esc(c.name)+'</b>'+(c.verified?'':' <span class="badge b-line">Unverified</span>')+'<br><span style="font-size:10.5px;color:var(--muted)">'+esc(c.email)+' · '+esc(c.phone||'—')+'</span></td>'+
+      '<td>'+dFmt(c.createdAt)+'</td><td class="mono-nums">'+orders.length+'</td><td class="mono-nums">'+fmt(spend)+'</td>'+
+      '<td><button class="btn btn-line btn-sm" data-action="adm-cust" data-email="'+esc(c.email)+'">HISTORY</button></td></tr>';
+  }).join('');
+  return '<div class="adm-top"><h1>Customers</h1><span class="badge b-line">'+DB.users.filter(x=>x.role==='customer').length+' registered</span></div>'+
+  '<div class="adm-card"><table class="tbl"><thead><tr><th>Customer</th><th>Joined</th><th>Orders</th><th>Lifetime spend</th><th></th></tr></thead><tbody>'+(rows||'<tr><td colspan="5" style="color:var(--muted)">No customers yet.</td></tr>')+'</tbody></table></div>';
+};
+function openCustomerHistory(email){
+  const c = DB.users.find(x=>x.email===email);
+  const orders = DB.orders.filter(o=>o.email===email||(c&&o.userId&&o.userId===c.id));
+  openModal('<h3>'+esc(c?c.name:email)+'</h3><div class="sub">'+esc(email)+' · purchase history &nbsp; <button class="mini-link" data-action="email-customer" data-email="'+esc(email)+'">EMAIL CUSTOMER</button></div>'+
+    (orders.length? orders.map(o=>'<div class="lowstock"><span>'+esc(o.no)+' · '+dFmt(o.createdAt)+' · '+o.items.length+' item(s)</span><span><b>'+fmt(o.total)+'</b> <span class="pill '+(o.status==='Delivered'?'pl-green':'pl-gold')+'">'+esc(o.status)+'</span></span></div>').join('')
+      : '<p style="color:var(--muted);font-size:13px">No orders yet.</p>'), true);
+}
+
+/* ---------- COUPONS ---------- */
+ADM.coupons = function(){
+  const rows = DB.coupons.map(c=>'<tr><td><b style="letter-spacing:.14em">'+esc(c.code)+'</b><br><span style="font-size:11px;color:var(--muted)">'+esc(c.note||'')+'</span></td>'+
+    '<td>'+(c.type==='percent'?c.value+'% off':c.type==='flat'?fmt(c.value)+' off':'Free shipping')+'</td><td class="mono-nums">₹'+c.min.toLocaleString('en-IN')+'</td>'+
+    '<td class="mono-nums">'+c.used+(c.usageLimit?'/'+c.usageLimit:'')+'</td>'+
+    '<td><button class="tgl'+(c.active?' on':'')+'" data-action="adm-coupon-tgl" data-code="'+esc(c.code)+'"></button></td>'+
+    '<td><button class="mini-link danger" data-action="adm-coupon-del" data-code="'+esc(c.code)+'">DELETE</button></td></tr>').join('');
+  return '<div class="adm-top"><h1>Coupons</h1></div>'+
+  '<div class="adm-card" style="margin-bottom:1.2rem"><h3>Create coupon</h3><form data-form="adm-coupon"><div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr auto;gap:.8rem;align-items:end">'+
+    '<div class="field" style="margin:0"><label>Code</label><input name="code" class="inp" required placeholder="VERVE15"></div>'+
+    '<div class="field" style="margin:0"><label>Type</label><select name="type" class="sel"><option value="percent">Percent off</option><option value="flat">Flat ₹ off</option><option value="freeship">Free shipping</option></select></div>'+
+    '<div class="field" style="margin:0"><label>Value</label><input name="value" type="number" class="inp" value="10"></div>'+
+    '<div class="field" style="margin:0"><label>Min subtotal (₹)</label><input name="min" type="number" class="inp" value="999"></div>'+
+    '<button class="btn btn-solid btn-sm">CREATE</button></div></form></div>'+
+  '<div class="adm-card"><table class="tbl"><thead><tr><th>Coupon</th><th>Benefit</th><th>Min order</th><th>Used</th><th>Active</th><th></th></tr></thead><tbody>'+(rows||'<tr><td colspan="6" style="color:var(--muted)">No coupons yet.</td></tr>')+'</tbody></table></div>';
+};
+
+/* ---------- MARKETING ---------- */
+ADM.marketing = function(){
+  const ann = DB.settings.announcements.map(a=>'<div class="lowstock"><span><button class="tgl'+(a.active?' on':'')+'" data-action="adm-ann-tgl" data-id="'+a.id+'"></button> &nbsp;'+esc(a.text)+'</span><button class="mini-link danger" data-action="adm-ann-del" data-id="'+a.id+'">REMOVE</button></div>').join('');
+  const subs = DB.subscribers.map(s=>esc(s.email)).join('\n');
+  const abandoned = Object.entries(DB.carts).filter(([k,c])=>c.items&&c.items.length).map(([k,c])=>{
+    const u = DB.users.find(x=>x.id===k);
+    const val = c.items.reduce((s,i)=>{ const p=DB.products.find(x=>x.id===i.pid); return s+(p?p.price*i.qty:0); },0);
+    return '<div class="lowstock"><span>'+(u?esc(u.name+' · '+u.email):'Guest '+k.slice(0,14)+'…')+'</span><span>'+c.items.length+' items · <b class="mono-nums">'+fmt(val)+'</b> · '+timeAgo(c.updatedAt)+'</span></div>';
+  }).join('');
+  const emails = DB.emails.slice(0,14).map(e=>'<div class="lowstock"><span>'+esc(e.subject)+'</span><span style="display:flex;gap:1rem;align-items:center"><span style="color:var(--muted);font-size:11px">'+esc(e.to)+' · '+timeAgo(e.at)+'</span><button class="mini-link" data-action="view-email" data-id="'+e.id+'">VIEW</button></span></div>').join('');
+  const pendingReviews = DB.reviews.filter(r=>r.status==='pending');
+  const revRows = pendingReviews.map(r=>{ const p=DB.products.find(x=>x.id===r.pid); return '<div class="lowstock"><span>★'+r.rating+' · “'+esc(r.title)+'” — '+esc(r.name)+' on '+esc(p?p.name:r.pid)+'</span><span><button class="btn btn-line btn-sm" data-action="adm-rev-approve" data-id="'+r.id+'">APPROVE</button> <button class="mini-link danger" data-action="adm-rev-del" data-id="'+r.id+'">DELETE</button></span></div>'; }).join('');
+  return '<div class="adm-top"><h1>Marketing</h1></div>'+
+  '<div class="adm-2col">'+
+  '<div class="adm-card"><h3>Announcement bar</h3><form data-form="adm-ann" style="display:flex;gap:.7rem;margin-bottom:1rem"><input name="text" class="inp" placeholder="New announcement text…" required><button class="btn btn-solid btn-sm">ADD</button></form>'+(ann||'<p style="font-size:12px;color:var(--muted)">No announcements.</p>')+'</div>'+
+  '<div class="adm-card"><h3>Newsletter subscribers ('+DB.subscribers.length+')</h3><textarea class="inp" rows="8" readonly onclick="this.select()">'+subs+'</textarea><button class="btn btn-line btn-sm" style="margin-top:.8rem" data-action="adm-export-subs">EXPORT CSV</button></div>'+
+  '</div>'+
+  '<div class="adm-2col">'+
+  '<div class="adm-card"><h3>Abandoned carts ('+Object.entries(DB.carts).filter(([k,c])=>c.items&&c.items.length).length+')</h3>'+(abandoned||'<p style="font-size:12px;color:var(--muted)">No open carts right now.</p>')+'<p style="font-size:11px;color:var(--muted);margin-top:.8rem">Production: trigger a Resend recovery sequence 1h / 24h after abandonment.</p></div>'+
+  '<div class="adm-card"><h3>Email log (simulated Resend outbox)</h3>'+(emails||'<p style="font-size:12px;color:var(--muted)">No emails sent yet.</p>')+'</div>'+
+  '</div>'+
+  '<div class="adm-card" style="margin-top:1.2rem"><h3>Review moderation ('+pendingReviews.length+' pending)</h3>'+(revRows||'<p style="font-size:12px;color:var(--muted)">No reviews awaiting moderation. Customer reviews appear here before they go live on product pages.</p>')+'</div>';
+};
+
+/* ---------- CONTENT ---------- */
+ADM.content = function(){
+  const h = DB.settings.hero;
+  const pageEd = slug=>{ const o = DB.settings.pages[slug]; const base = DEFAULT_PAGES[slug]; return '<form data-form="adm-page" data-slug="'+slug+'" style="margin-bottom:1.4rem"><div class="frow"><div class="field" style="margin:0"><label>'+slug+' — title</label><input name="title" class="inp" value="'+esc((o?o.title:base.title))+'"></div>'+
+    '<div class="field" style="margin:0;align-self:end"><label style="visibility:hidden">x</label><div style="display:flex;gap:.7rem">'+(o?'<button type="button" class="btn btn-line btn-sm" data-action="adm-page-reset" data-slug="'+slug+'">RESET</button>':'')+'<button class="btn btn-solid btn-sm">SAVE</button></div></div></div>'+
+    '<div class="field" style="margin-top:.7rem"><label>Content (HTML allowed)</label><textarea name="html" rows="5" class="inp" style="font-size:12px;font-family:monospace">'+esc(o?o.html:base.html)+'</textarea></div></form>'; };
+  return '<div class="adm-top"><h1>Content</h1></div>'+
+  '<div class="adm-2col">'+
+  '<div class="adm-card"><h3>Hero section</h3><form data-form="adm-hero">'+
+    '<div class="field"><label>Kicker</label><input name="kicker" class="inp" value="'+esc(h.kicker)+'"></div>'+
+    '<div class="frow"><div class="field"><label>Headline line 1</label><input name="line1" class="inp" value="'+esc(h.line1)+'"></div><div class="field"><label>Headline line 2</label><input name="line2" class="inp" value="'+esc(h.line2)+'"></div></div>'+
+    '<div class="field"><label>Supporting text</label><input name="sub" class="inp" value="'+esc(h.sub)+'"></div>'+
+    '<div class="frow"><div class="field"><label>CTA 1</label><input name="cta1" class="inp" value="'+esc(h.cta1)+'"></div><div class="field"><label>CTA 2</label><input name="cta2" class="inp" value="'+esc(h.cta2)+'"></div></div>'+
+    '<div class="field"><label>Campaign image — upload from your computer</label>'+
+      '<div id="hero-drop" class="pf-drop" data-action="hero-pick" style="padding:1.2rem"><input type="file" id="hero-file" accept="image/*" hidden>'+
+        '<div class="pf-drop-inner"><b>Drop your campaign image here</b><span>JPG · PNG · WEBP — auto-compressed to 1600 px</span>'+
+        '<button type="button" class="btn btn-line btn-sm" data-action="hero-pick">CHOOSE IMAGE</button></div></div>'+
+      '<div style="display:flex;gap:.8rem;align-items:center;margin-top:.7rem"><img id="hero-thumb" src="'+esc(h.image)+'" alt="hero preview" style="width:150px;height:84px;object-fit:cover;border:1px solid var(--line-2)">'+
+      '<button type="button" class="btn btn-line btn-sm" data-action="hero-reset">RESET TO DEFAULT</button></div>'+
+      '<input type="hidden" name="image" value="'+esc(h.image)+'"></div>'+
+    '<button class="btn btn-solid btn-sm">SAVE HERO</button></form></div>'+
+  '<div class="adm-card"><h3>Social & contact</h3><form data-form="adm-social">'+
+    '<div class="field"><label>Instagram URL</label><input name="instagram" class="inp" value="'+esc(DB.settings.social.instagram)+'"></div>'+
+    '<div class="field"><label>Support email</label><input name="email" class="inp" value="'+esc(VERVE_CONFIG.contact.email)+'"></div>'+
+    '<button class="btn btn-solid btn-sm">SAVE</button><p style="font-size:11px;color:var(--muted);margin-top:.7rem">Runtime demo note: social/contact changes apply this session; wire to site_settings in production.</p></form></div>'+
+  '</div>'+
+  '<div class="adm-card"><h3>Policy & story pages</h3>'+['about','shipping-policy','returns','privacy','terms'].map(pageEd).join('')+'</div>';
+};
+
+/* ---------- SETTINGS ---------- */
+ADM.settings = function(){
+  const s = DB.settings.shipping;
+  return '<div class="adm-top"><h1>Settings</h1></div><div class="adm-2col">'+
+  '<div class="adm-card"><h3>Shipping & fees</h3><form data-form="adm-shipping">'+
+    '<div class="frow"><div class="field"><label>Free shipping above (₹)</label><input name="freeAbove" type="number" class="inp" value="'+s.freeAbove+'"></div>'+
+    '<div class="field"><label>Flat shipping (₹)</label><input name="flat" type="number" class="inp" value="'+s.flat+'"></div></div>'+
+    '<div class="field"><label>COD fee (₹)</label><input name="codFee" type="number" class="inp" value="'+s.codFee+'"></div>'+
+    '<button class="btn btn-solid btn-sm">SAVE</button></form></div>'+
+  '<div class="adm-card"><h3>Analytics keys</h3><p style="font-size:12px;color:var(--muted);margin-bottom:1rem">Leave empty to disable. Production values live in environment variables, never in code.</p>'+
+    '<div class="field"><label>GA4 measurement ID</label><input value="'+esc(VERVE_CONFIG.gaId)+'" disabled class="inp" placeholder="G-XXXXXXXXXX"></div>'+
+    '<div class="field"><label>Meta Pixel ID</label><input value="'+esc(VERVE_CONFIG.pixelId)+'" disabled class="inp" placeholder="000000000000000"></div>'+
+    '<p style="font-size:11px;color:var(--muted)">Set via VERVE_CONFIG in this build / NEXT_PUBLIC_ vars in production.</p></div>'+
+  '</div>'+
+  '<div class="adm-card" style="border-color:var(--burgundy)"><h3 style="color:var(--burgundy)">Danger zone</h3>'+
+    '<p style="font-size:12.5px;color:var(--muted);margin-bottom:1rem">Reset the demo database to its seeded state (orders, users, carts, coupons). Cannot be undone.</p>'+
+    '<button class="btn btn-burgundy btn-sm" data-action="adm-reset">RESET DEMO DATA</button></div>';
+};
+
+/* ---------- DIAGNOSTICS ---------- */
+ADM.diagnostics = function(){
+  return '<div class="adm-top"><h1>Diagnostics</h1><button class="btn btn-solid btn-sm" data-action="adm-run-tests">RUN ALL TESTS</button></div>'+
+  '<div class="adm-card"><h3>Automated test suite</h3><p style="font-size:12.5px;color:var(--muted);margin-bottom:1rem">Covers pricing maths, cart rules, inventory safety, coupon validation and order creation. Tests run in-memory against a sandbox copy of the database.</p><div id="test-results"><p style="font-size:12px;color:var(--muted)">Press “Run all tests”.</p></div></div>';
+};
+</script>

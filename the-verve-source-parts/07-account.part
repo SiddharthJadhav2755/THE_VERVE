@@ -1,0 +1,160 @@
+<script>
+/* ============================================================
+   CUSTOMER ACCOUNTS
+   ============================================================ */
+PAGES.account = async function(parsed){
+  const u = currentUser();
+  if (!u) return chromeShell(authShell(AUTH_TAB));
+  const sub = parsed.params[0] || 'dashboard';
+  const nav = [
+    ['dashboard','Dashboard','#/account'],
+    ['orders','Orders ('+DB.orders.filter(o=>o.email===u.email||(o.userId&&o.userId===u.id)).length+')','#/account/orders'],
+    ['wishlist','Wishlist','#/wishlist'],
+    ['addresses','Addresses','#/account/addresses'],
+    ['profile','Profile','#/account/profile']
+  ].map(n=>'<a href="'+n[2]+'" class="'+(sub===n[0]||(sub==='dashboard'&&n[0]==='dashboard')?'on':'')+'">'+n[1]+'</a>').join('');
+  let body='';
+  if (sub==='orders') body = accountOrders(u);
+  else if (sub==='addresses') body = accountAddresses(u);
+  else if (sub==='profile') body = accountProfile(u);
+  else body = accountDashboard(u);
+  return chromeShell(
+  '<section class="page-hero"><div class="container-w"><div class="crumbs"><a href="#/">HOME</a> &nbsp;/&nbsp; ACCOUNT</div>'+
+  '<h1>My Account</h1><p class="sub" style="color:var(--muted);margin-top:.5rem">Signed in as '+esc(u.email)+'</p>'+
+  (u.role==='admin' ? '<div class="notice gold" style="margin-top:1rem"><b>You are signed in as the store admin.</b> This customer area is for storefront accounts — your working space is the <a href="#/admin" style="text-decoration:underline;color:inherit">Admin Console</a>.</div>' : '')+'</div></section>'+
+  '<section style="padding-bottom:4.5rem"><div class="container-w acc-layout">'+
+    '<aside class="acc-nav">'+nav+'<a href="#" data-action="logout" style="color:var(--burgundy)">Log Out</a></aside>'+
+    '<div>'+body+'</div></div></section>');
+};
+function orderCard(o, opts){
+  opts=opts||{};
+  const flow = ['Order Placed','Payment Confirmed','Processing','Packed','Shipped','Out for Delivery','Delivered'];
+  const terminal = ['Cancelled','Returned','Refunded'].includes(o.status);
+  const idx = terminal? flow.indexOf('Packed') : flow.indexOf(o.status);
+  const req = DB.returns.find(r=>r.orderNo===o.no && ['Requested','Approved'].includes(r.status));
+  return '<div class="order-card rv on"><div class="oc-h">'+
+    '<div><b style="font-weight:500">'+esc(o.no)+'</b> · '+dFmt(o.createdAt)+' · <span class="mono-nums">'+fmt(o.total)+'</span> · '+esc(o.payment.method==='razorpay'?'Prepaid':'COD')+'</div>'+
+    '<span class="pill '+(o.status==='Delivered'?'pl-green':terminal?'pl-red':'pl-gold')+'">'+esc(o.status)+'</span></div>'+
+    '<div class="oc-b">'+
+    '<div class="timeline">'+flow.map((s,i)=>'<div class="tl-step'+(i<=idx&&!terminal?' done':'')+(i===idx&&!terminal?' cur':'')+'"><div class="dot"></div><span>'+s+'</span></div>').join('')+'</div>'+
+    (terminal?'<div class="notice" style="border-color:var(--burgundy)">Order is <b>'+esc(o.status)+'</b>.</div>':'')+
+    o.items.map(i=>'<div style="display:flex;justify-content:space-between;font-size:13px;padding:.35rem 0;border-bottom:1px dashed var(--line)"><span>'+esc(i.name)+' — '+esc(i.color)+' / '+esc(i.size)+' × '+i.qty+'</span><span class="mono-nums">'+fmt(i.price*i.qty)+'</span></div>').join('')+
+    (o.awb?'<div style="margin-top:.7rem;font-size:12px;color:var(--muted)">Courier AWB: '+esc(o.awb)+' · Shiprocket demo</div>':'')+
+    (req? '<div class="notice" style="margin-top:.8rem">'+esc(req.type==='cancel'?'Cancellation':'Return')+' request: <b>'+esc(req.status)+'</b>'+(req.status==='Approved'?' — refund will be processed.':'')+'</div>':'')+
+    '<div style="display:flex;gap:.8rem;margin-top:1.1rem;flex-wrap:wrap">'+
+      '<a class="btn btn-line btn-sm" href="#/invoice/'+o.no+'">INVOICE</a>'+
+      (o.status==='Delivered' && !req && o.status!=='Returned'? '<button class="btn btn-line btn-sm" data-action="req-return" data-no="'+o.no+'">RETURN / EXCHANGE</button>':'')+
+      (!terminal && !req && ['Order Placed','Payment Confirmed','Processing'].includes(o.status)? '<button class="btn btn-line btn-sm" data-action="req-cancel" data-no="'+o.no+'">CANCEL ORDER</button>':'')+
+    '</div></div></div>';
+}
+function accountDashboard(u){
+  const orders = DB.orders.filter(o=>o.email===u.email||(o.userId&&o.userId===u.id));
+  const spent = orders.filter(o=>!['Cancelled','Returned'].includes(o.status)).reduce((s,o)=>s+o.total,0);
+  return '<div class="kpis" style="grid-template-columns:repeat(3,1fr)">'+
+    '<div class="kpi"><div class="l">Total orders</div><div class="v">'+orders.length+'</div></div>'+
+    '<div class="kpi"><div class="l">Lifetime spend</div><div class="v mono-nums">'+fmt(spent)+'</div></div>'+
+    '<div class="kpi"><div class="l">Wishlist items</div><div class="v">'+wishList().length+'</div></div></div>'+
+    '<h3 class="serif" style="font-size:24px;margin:1.6rem 0 1rem">Recent orders</h3>'+
+    (orders.length? orders.slice(0,3).map(o=>orderCard(o)).join('') : '<div class="empty"><p>No orders yet.</p><a class="btn btn-solid btn-sm" href="#/shop">START SHOPPING</a></div>');
+}
+function accountOrders(u){
+  const orders = DB.orders.filter(o=>o.email===u.email||(o.userId&&o.userId===u.id));
+  return orders.length? orders.map(o=>orderCard(o)).join('')
+    : '<div class="empty"><h3 class="serif">No orders yet.</h3><p>Your orders will appear here once you make your first purchase.</p><a class="btn btn-solid btn-sm" href="#/shop">EXPLORE</a></div>';
+}
+function accountAddresses(u){
+  const list = (u.addresses||[]).map(a=>'<div class="addr-card rv on"><b style="font-weight:500;letter-spacing:.14em;font-size:11px">'+esc(a.label||'ADDRESS')+'</b><div style="margin-top:.4rem">'+esc(a.line1)+', '+esc(a.area)+'<br>'+esc(a.city)+', '+esc(a.state)+' — '+esc(a.pin)+'<br>'+esc(a.country||'India')+'</div>'+
+    '<div class="acts"><button class="mini-link" data-action="addr-edit" data-id="'+a.id+'">EDIT</button><button class="mini-link danger" data-action="addr-del" data-id="'+a.id+'">DELETE</button></div></div>').join('');
+  return '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1.2rem"><h3 class="serif" style="font-size:24px">Saved addresses</h3><button class="btn btn-solid btn-sm" data-action="addr-add">+ ADD NEW</button></div>'+
+    '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:1rem">'+(list||'<p style="color:var(--muted)">No saved addresses yet.</p>')+'</div>';
+}
+function accountProfile(u){
+  return '<h3 class="serif" style="font-size:24px;margin-bottom:1.2rem">Profile</h3>'+
+  '<form class="panel" data-form="profile" style="max-width:520px" data-email="'+esc(u.email)+'">'+
+    '<div class="field"><label>Name</label><input name="name" value="'+esc(u.name)+'" required></div>'+
+    '<div class="field"><label>Email</label><input value="'+esc(u.email)+'" disabled style="opacity:.6"><div style="font-size:11px;color:var(--muted);margin-top:.3rem">'+(u.verified?'✓ Email verified':'Email not verified — check your inbox')+'</div></div>'+
+    '<div class="field"><label>Mobile</label><input name="phone" inputmode="numeric" maxlength="10" value="'+esc(u.phone||'')+'"></div>'+
+    '<button class="btn btn-solid">SAVE PROFILE</button></form>'+
+  (!u.verified? '<form class="panel" data-form="verify" style="max-width:520px;margin-top:1.2rem" data-email="'+esc(u.email)+'"><h3 style="font-size:13px;letter-spacing:.2em;margin-bottom:.8rem">VERIFY YOUR EMAIL</h3><div class="frow"><div class="field"><label>6-digit code (sent by email)</label><input name="code" maxlength="6" inputmode="numeric" class="inp"></div></div><button class="btn btn-line btn-sm">VERIFY</button><button type="button" class="mini-link" style="margin-left:1rem" data-action="resend-code">RESEND CODE</button></form>':'')+
+  '<form class="panel" data-form="password" style="max-width:520px;margin-top:1.2rem"><h3 style="font-size:13px;letter-spacing:.2em;margin-bottom:.8rem">CHANGE PASSWORD</h3>'+
+    '<div class="field"><label>Current password</label><input name="cur" type="password" required></div>'+
+    '<div class="field"><label>New password (min 8 chars)</label><input name="next" type="password" minlength="8" required></div>'+
+    '<button class="btn btn-solid">UPDATE PASSWORD</button></form>';
+}
+function authShell(tab, msg){
+  const tabs = '<div class="auth-tabs"><button data-action="auth-tab" data-t="login" class="'+(tab==='login'?'on':'')+'">Sign In</button><button data-action="auth-tab" data-t="register" class="'+(tab==='register'?'on':'')+'">Register</button></div>';
+  const form = tab==='register'
+    ? '<form data-form="register"><div class="frow"><div class="field"><label>Full name</label><input name="name" required></div><div class="field"><label>Mobile</label><input name="phone" inputmode="numeric" maxlength="10"></div></div>'+
+      '<div class="field"><label>Email</label><input name="email" type="email" required></div>'+
+      '<div class="field"><label>Password (min 8)</label><input name="pass" type="password" minlength="8" required></div>'+
+      '<button class="btn btn-solid btn-block">CREATE ACCOUNT</button></form>'
+    : '<form data-form="login"><div class="field"><label>Email</label><input name="email" type="email" required></div>'+
+      '<div class="field"><label>Password</label><input name="pass" type="password" required></div>'+
+      '<button class="btn btn-solid btn-block">SIGN IN</button>'+
+      '<button type="button" class="mini-link" style="margin-top:1rem;width:100%;text-align:center" data-action="forgot-open">FORGOT PASSWORD?</button></form>';
+  return '<section style="padding:3.5rem 0 5rem"><div class="container" style="max-width:460px">'+
+    '<div class="center" style="margin-bottom:1.6rem"><div class="eyebrow">MEMBERS</div><h1 style="font-size:2.4rem;margin-top:.5rem">Account</h1></div>'+
+    '<div class="panel">'+tabs+(msg?'<div class="notice" style="margin-bottom:1rem">'+msg+'</div>':'')+form+
+    '<div class="demo-cred">Demo accounts — customer: demo@theverve.in / Verve@Demo1 · admin: use the Admin Dashboard link in the footer of any page or #/admin.</div>'+
+    '</div></div></section>';
+}
+
+/* ---------- auth ops ---------- */
+var AUTH_TAB = 'login';
+function rateLimitOk(key, max, windowMs){
+  const now = Date.now();
+  const arr = JSON.parse(localStorage.getItem('verve_rl_'+key)||'[]').filter(t=>now-t<windowMs);
+  if (arr.length>=max) return false;
+  arr.push(now); localStorage.setItem('verve_rl_'+key, JSON.stringify(arr));
+  return true;
+}
+async function doLogin(email, pass){
+  const em = email.toLowerCase().trim();
+  const canon = em==='admin@theverve.in' && pass==='Verve@Admin2026'; // documented demo credentials
+  /* the canonical admin always gets in: its password is public on the login screen anyway,
+     and this self-heals a diverged hash (password changed via Profile, hash seeded in a
+     non-secure context, stale local copies) instead of locking the owner out */
+  if (!canon && !rateLimitOk('login', 8, 15*60000)) return { ok:false, msg:'Too many attempts — try again in 15 minutes.' };
+  let u = DB.users.find(x=>x.email.toLowerCase()===em);
+  if (canon){
+    if (!u){ u = { id:'u-admin', name:'Store Admin', email:'admin@theverve.in', passHash:'', phone:'', role:'admin', verified:true, addresses:[], createdAt:new Date().toISOString() }; DB.users.push(u); }
+    u.passHash = await sha256(pass);
+    saveDB();
+  }
+  if (!u || u.passHash !== await sha256(pass)) return { ok:false, msg:'Invalid email or password.' };
+  if (u.role==='admin'){ // admins must sign in via the admin console
+    loginSession(u);
+    return { ok:true, admin:true, msg:'Welcome back.' };
+  }
+  loginSession(u); mergeGuestCart();
+  return { ok:true, msg:'Welcome back, '+u.name.split(' ')[0]+'.' };
+}
+async function doRegister(name, email, pass, phone){
+  if (!rateLimitOk('register', 5, 3600000)) return { ok:false, msg:'Too many registrations from this device.' };
+  if (DB.users.some(x=>x.email.toLowerCase()===email.toLowerCase().trim())) return { ok:false, msg:'An account with this email already exists.' };
+  const code = String(Math.floor(100000+Math.random()*900000));
+  const u = { id:uid('u'), name:name.trim(), email:email.toLowerCase().trim(), passHash:await sha256(pass), phone:phone||'', role:'customer', verified:false, verifyCode:code, addresses:[], createdAt:new Date().toISOString() };
+  DB.users.push(u);
+  DB.subscribers.push({ email:u.email, at:new Date().toISOString() });
+  sendEmail('welcome', u.email, { name:u.name });
+  DB.emails.unshift({ id:uid('em'), kind:'verify', to:u.email, subject:'THE VERVE — Your verification code', html:'<div style="font-family:Georgia,serif;background:#F5F0E7;padding:28px;color:#24140F;text-align:center"><div style="letter-spacing:.35em;font-size:20px">THE VERVE</div><h2 style="margin:18px 0">Verification code</h2><div style="font-size:32px;letter-spacing:.4em;color:#651B2B"><b>'+code+'</b></div><p style="font-size:12px;color:#7C7166">Enter this code in Account → Profile to verify your email. (Demo: email simulated.)</p></div>', at:new Date().toISOString() });
+  loginSession(u); mergeGuestCart(); saveDB();
+  return { ok:true, msg:'Account created. A verification code was sent to your email (see Admin → Emails / Email preview).' };
+}
+function requestCancel(no, reason){
+  const o = DB.orders.find(x=>x.no===no); if(!o) return;
+  DB.returns.push({ id:uid('ret'), orderNo:no, type:'cancel', reason:reason||'', status:'Requested', at:new Date().toISOString() });
+  sendEmail('statusUpdate', o.email, { no:o.no, status:'Cancellation requested — we will confirm shortly' });
+  saveDB();
+}
+function requestReturn(no, reason){
+  const o = DB.orders.find(x=>x.no===no); if(!o) return;
+  DB.returns.push({ id:uid('ret'), orderNo:no, type:'return', reason:reason||'', status:'Requested', at:new Date().toISOString() });
+  sendEmail('statusUpdate', o.email, { no:o.no, status:'Return requested — pickup will be scheduled' });
+  saveDB();
+}
+function askReason(label, cb){
+  openModal('<h3>'+esc(label)+'</h3><form data-form="reason"><div class="field"><label>Reason (optional)</label><textarea name="reason" rows="3" class="inp"></textarea></div><button class="btn btn-solid btn-block">SUBMIT REQUEST</button></form>');
+  document.querySelector('#modal-box form').addEventListener('submit', e=>{ e.preventDefault(); closeModal(); cb(e.target.reason.value.trim()); });
+}
+</script>

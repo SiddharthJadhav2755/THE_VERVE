@@ -1,0 +1,603 @@
+<script>
+/* ============================================================
+   GLOBAL EVENTS — delegation for all actions & forms
+   ============================================================ */
+function buildMobileNav(){
+  const m = document.getElementById('mnav');
+  m.innerHTML = '<div class="drawer-h"><span class="t">MENU</span><button class="icon-btn" data-action="mnav-close" aria-label="Close">'+svgIc('close')+'</button></div>'+
+  '<div class="drawer-b" style="padding:1rem 1.6rem">'+
+    [['#/', 'Home'],['#/shop','Shop'],['#/collections/new-arrivals','New Arrivals'],['#/collections','Collections'],['#/collections/best-sellers','Best Sellers'],['#/about','About'],['#/contact','Contact'],['#/track-order','Track Order'],['#/account','Account'],['#/wishlist','Wishlist']]
+    .map(l=>'<a href="'+l[0]+'" data-action="mnav-close" style="display:block;padding:.85rem 0;border-bottom:1px solid var(--line);font-family:var(--serif);font-size:20px">'+l[1]+'</a>').join('')+
+    '<button data-action="search-open" style="display:flex;gap:.8rem;align-items:center;padding:.85rem 0;border-bottom:1px solid var(--line);font-family:var(--serif);font-size:20px;width:100%;text-align:left">'+svgIc('search')+'Search</button>'+
+  '</div>';
+}
+function openSearch(){
+  openModal('<h3>Search</h3><div class="sub">Find pieces across the full index.</div>'+
+  '<div class="upi-field" style="margin-bottom:1rem">'+svgIc('search')+'<input id="search-in" placeholder="OVERSIZED TEE, HOODIE, LINEN…" style="flex:1;border:0;background:transparent;outline:none;letter-spacing:.12em;text-transform:uppercase" autocomplete="off"></div>'+
+  '<div id="search-results" style="max-height:52vh;overflow-y:auto"></div>', true);
+  const inp = document.getElementById('search-in');
+  const paint = ()=>{
+    const q = inp.value.trim().toLowerCase();
+    const r = document.getElementById('search-results');
+    if (!q){ r.innerHTML='<p style="font-size:12px;color:var(--muted)">Try “oversized”, “hoodie”, “linen”, “cargo”…</p>'; return; }
+    const hits = DB.products.filter(p=>p.published && (p.name+' '+catName(p.category)+' '+p.material+' '+p.fit).toLowerCase().includes(q)).slice(0,6);
+    r.innerHTML = hits.length? hits.map(p=>'<div class="lowstock" style="cursor:pointer" data-action="goto-product" data-slug="'+p.slug+'"><span style="display:flex;gap:.8rem;align-items:center;width:70%">'+(p.images[0]? '<img src="'+p.images[0]+'" style="width:38px;height:48px;object-fit:cover" alt="">':'')+esc(p.name)+'</span><b class="mono-nums">'+fmt(p.price)+'</b></div>').join('')
+      : '<p style="font-size:13px;color:var(--muted)">No pieces match “'+esc(q)+'”.</p>';
+  };
+  inp.addEventListener('input', paint); paint();
+  inp.focus();
+}
+
+/* ---------- checkout helpers ---------- */
+function validCheckoutDetails(d){
+  const errs = [];
+  if (!d.name || d.name.trim().length<3) errs.push('name');
+  if (!validEmail(d.email)) errs.push('email');
+  if (!validPhone(d.phone)) errs.push('phone');
+  if (!d.line1 || d.line1.trim().length<4) errs.push('line1');
+  if (!d.area || d.area.trim().length<2) errs.push('area');
+  if (!d.city || d.city.trim().length<2) errs.push('city');
+  if (!d.state || d.state.trim().length<2) errs.push('state');
+  if (!validPin(d.pin)) errs.push('pin');
+  return errs;
+}
+function markCheckoutErrors(errs){
+  document.querySelectorAll('#app [data-form="checkout-details"] .field').forEach(f=>f.classList.remove('bad'));
+  errs.forEach(k=>{ const inp=document.querySelector('[data-form="checkout-details"] [name="'+k+'"]'); if(inp) inp.closest('.field').classList.add('bad'); });
+  toast('Please fix the highlighted fields', true);
+}
+
+/* ============================================================
+   AUTOMATED TEST SUITE
+   ============================================================ */
+async function runTests(){
+  const snapshot = JSON.stringify(DB);
+  const _tok = localStorage.getItem(VERVE_CONFIG.tokenKey);
+  const _guest = localStorage.getItem(VERVE_CONFIG.guestKey);
+  localStorage.removeItem(VERVE_CONFIG.tokenKey); // run as guest for deterministic cart ids
+  const results = [];
+  const t = async (name, fn)=>{
+    const t0=performance.now();
+    try{ await fn(); results.push([name,'PASS',Math.round(performance.now()-t0)]); }
+    catch(e){ results.push([name,'FAIL — '+e.message,Math.round(performance.now()-t0)]); }
+  };
+  const assert = (cond,msg)=>{ if(!cond) throw new Error(msg||'assertion failed'); };
+  const c = VERVE_CONFIG.currency;
+  await t('Currency formatting (en-IN)', ()=>{ assert(fmt(1499)===c+'1,499', 'got '+fmt(1499)); assert(fmt(99999)===c+'99,999','grouping failed'); });
+  await t('GST slabs 5% / 12% (inclusive)', ()=>{ assert(lineTaxIncluded(999).rate===0.05,'≤1000 should be 5%'); assert(lineTaxIncluded(1499).rate===0.12,'>1000 should be 12%'); assert(lineTaxIncluded(1000).included===48,'included tax math'); });
+  await t('PIN code validation', ()=>{ assert(validPin('400001'),'400001 valid'); assert(!validPin('040001'),'leading zero invalid'); assert(!validPin('40000'),'5 digits invalid'); });
+  await t('Cart: add honours available stock', ()=>{
+    DB.carts['t1']={items:[]}; localStorage.setItem(VERVE_CONFIG.guestKey,'t1');
+    setStock('p01','Ivory','M',2);
+    assert(addToCart('p01','Ivory','M',1).ok===true,'first add should pass');
+    assert(addToCart('p01','Ivory','M',2).ok===false,'oversell must be blocked');
+  });
+  await t('Cart: quantity update clamps to stock', ()=>{
+    DB.carts['t1']={items:[{pid:'p01',color:'Ivory',size:'M',qty:1}]};
+    setStock('p01','Ivory','M',3);
+    updateCartItem(0, 99);
+    assert(cartItems()[0].qty===3,'qty must clamp to stock 3');
+    updateCartItem(0, 0);
+    assert(cartItems().length===0,'zero removes line');
+  });
+  await t('Cart: totals equal sum of lines', ()=>{
+    DB.carts['t1']={items:[{pid:'p01',color:'Ivory',size:'M',qty:2},{pid:'p07',color:'Onyx',size:'L',qty:1}]};
+    setStock('p01','Ivory','M',10); setStock('p07','Onyx','L',10);
+    const calc = cartCalc('');
+    assert(calc.subtotal=== 1499*2+999, 'subtotal '+calc.subtotal);
+  });
+  await t('Shipping threshold rules', ()=>{
+    DB.carts['t1']={items:[{pid:'p01',color:'Ivory',size:'M',qty:1}]};
+    assert(cartCalc('').shipping===DB.settings.shipping.flat,'below threshold charges flat fee');
+    DB.carts['t1']={items:[{pid:'p04',color:'Onyx',size:'L',qty:1}]};
+    assert(cartCalc('').shipping===0,'above threshold is free');
+  });
+  await t('Coupon: percent discount applied', ()=>{
+    DB.carts['t1']={items:[{pid:'p01',color:'Ivory',size:'M',qty:2}]};
+    const calc = cartCalc('VERVE10');
+    assert(calc.coupon==='VERVE10','coupon should apply');
+    assert(calc.discount===300,'10% of 2998 = 300, got '+calc.discount);
+  });
+  await t('Coupon: minimum order enforced', ()=>{
+    DB.carts['t1']={items:[]};
+    assert(validateCoupon('FIRST200').ok===false,'empty cart below min ₹999');
+    DB.carts['t1']={items:[{pid:'p07',color:'Onyx',size:'L',qty:2}]};
+    assert(validateCoupon('FIRST200').ok===true,'min met on 1998');
+  });
+  await t('Coupon: free-shipping type zeroes shipping', ()=>{
+    DB.carts['t1']={items:[{pid:'p07',color:'Onyx',size:'L',qty:1}]};
+    const calc = cartCalc('FREESHIP');
+    assert(calc.shipping===0,'shipping must be 0');
+  });
+  await t('Coupon: invalid / inactive rejected', ()=>{
+    assert(validateCoupon('NOSUCH').ok===false,'unknown code');
+    DB.coupons.push({code:'DEAD',type:'percent',value:50,min:0,active:false,usageLimit:0,used:0});
+    assert(validateCoupon('DEAD').ok===false,'inactive code');
+    DB.coupons = DB.coupons.filter(x=>x.code!=='DEAD');
+  });
+  await t('Order: creation decrements every variant', ()=>{
+    DB.carts['t1']={items:[{pid:'p02',color:'Onyx',size:'M',qty:2}]};
+    setStock('p02','Onyx','M',7);
+    const before = stockOf('p02','Onyx','M');
+    const details = { name:'Test Buyer', email:'test@example.com', phone:'9876543210', line1:'12 Test Lane', area:'Bandra', city:'Mumbai', state:'Maharashtra', pin:'400050', country:'India', saveAddr:false };
+    return createOrder(cartCalc(''), details, { method:'razorpay_upi', status:'Paid', verified:true }).then(o=>{
+      assert(stockOf('p02','Onyx','M')===before-2,'stock must drop by qty');
+      assert(o.total===o.subtotal+o.shipping,'total math');
+      assert(o.payment.verified===true,'payment must be verified server-side');
+      assert(DB.emails.some(e=>e.kind==='orderConfirmation'&&e.to==='test@example.com'),'confirmation email queued');
+      assert(cartItems().length===0,'cart cleared after order');
+    });
+  });
+  await t('Order: COD skips prepaid status', async ()=>{
+    DB.carts['t1']={items:[{pid:'p07',color:'Onyx',size:'L',qty:1}]};
+    const details = { name:'COD Test', email:'cod@example.com', phone:'9876543210', line1:'2 Test Lane', area:'A', city:'Pune', state:'MH', pin:'411001', country:'India' };
+    const o = await createOrder(cartCalc(''), details, { method:'cod' });
+    assert(o.payment.status==='COD Pending','COD pending');
+    assert(o.status==='Order Placed','starts as placed');
+    assert(o.total===o.subtotal+o.shipping+DB.settings.shipping.codFee,'COD fee added');
+  });
+  await t('Wishlist toggle round-trip', ()=>{
+    DB.wishlists['t1']=[];
+    assert(toggleWish('p03')===true,'first toggle saves');
+    assert(toggleWish('p03')===false,'second toggle unsaves');
+  });
+  await t('Shop filter: category scoping', ()=>{
+    const list = applyShopFilters({ cats:['streetwear'], sizes:[], colors:[], fits:[], price:[], sort:'featured', q:'' });
+    assert(list.every(p=>p.category==='streetwear'),'only streetwear returned');
+    assert(list.length>=3,'streetwear has seeded products');
+  });
+  await t('Sold-out variant renders disabled', ()=>{
+    PDP={pid:'p04',color:'Espresso',size:null,img:0};
+    const html = pdSizesHtml(DB.products.find(p=>p.id==='p04'));
+    assert(html.includes('disabled'),'sold-out size must be disabled');
+  });
+  await t('Admin route guard (no session → login)', async ()=>{
+    const tok = localStorage.getItem(VERVE_CONFIG.tokenKey);
+    localStorage.removeItem(VERVE_CONFIG.tokenKey);
+    const html = await renderAdmin({params:[], query:{}});
+    assert(html.indexOf('ADMIN CONSOLE')>-1,'must show login');
+    if (tok) localStorage.setItem(VERVE_CONFIG.tokenKey, tok);
+  });
+  await t('Email outbox: status update template', ()=>{
+    sendEmail('statusUpdate','x@example.com',{no:'TV-TEST',status:'Shipped',awb:'SR123'});
+    assert(DB.emails[0].subject.indexOf('Shipped')>-1,'subject reflects status');
+  });
+  await t('Auth: registration dedupes emails', async ()=>{
+    const r1 = await doRegister('Test User','dup@example.com','password123','9876500000');
+    assert(r1.ok===true,'first registration ok');
+    const r2 = await doRegister('Test Again','dup@example.com','password123','');
+    assert(r2.ok===false,'duplicate must be rejected');
+  });
+  // restore
+  DB = JSON.parse(snapshot); saveDB();
+  if (_tok) localStorage.setItem(VERVE_CONFIG.tokenKey, _tok);
+  if (_guest) localStorage.setItem(VERVE_CONFIG.guestKey, _guest); else localStorage.removeItem(VERVE_CONFIG.guestKey);
+  const pass = results.filter(r=>r[1]==='PASS').length;
+  return { results, pass, total: results.length };
+}
+async function runTestsUI(){
+  const box = document.getElementById('test-results');
+  if (box) box.innerHTML = '<div class="spin"></div>';
+  const r = await runTests();
+  if (box){
+    box.innerHTML = '<div class="notice gold" style="margin-bottom:1rem"><b>'+r.pass+' / '+r.total+' passed</b> — full results below. (Suite restores the database snapshot after running.)</div>'+
+    '<table class="tbl"><thead><tr><th>Test</th><th>Result</th><th style="text-align:right">ms</th></tr></thead><tbody>'+
+    r.results.map(x=>'<tr><td>'+esc(x[0])+'</td><td><span class="pill '+(x[1]==='PASS'?'pl-green':'pl-red')+'">'+esc(x[1])+'</span></td><td style="text-align:right">'+x[2]+'</td></tr>').join('')+'</tbody></table>';
+  }
+  console.table(r.results);
+}
+
+/* ============================================================
+   BOOT & GLOBAL LISTENERS
+   ============================================================ */
+document.addEventListener('click', async e=>{
+  const el = e.target.closest('[data-action]');
+  if (!el) return;
+  const a = el.dataset.action;
+  const u = currentUser();
+  switch(a){
+    case 'search-open': closeDrawer('mnav'); openSearch(); break;
+    case 'mnav-open': buildMobileNav(); openDrawer('mnav'); break;
+    case 'mnav-close': closeDrawer('mnav'); break;
+    /* ---- product editor image manager ---- */
+    case 'pf-pick': { if (e.target.id==='pf-file') break; const fi=document.getElementById('pf-file'); if(fi) fi.click(); break; }
+    case 'pf-cover': { const i=+el.dataset.i; if(ADM.pfImages[i]!==undefined){ const im=ADM.pfImages.splice(i,1)[0]; ADM.pfImages.unshift(im); pfRenderGrid(); } break; }
+    case 'pf-remove': { ADM.pfImages.splice(+el.dataset.i,1); pfRenderGrid(); break; }
+    /* ---- hero image upload (admin → content) ---- */
+    case 'hero-pick': { if (e.target.id==='hero-file') break; const hf=document.getElementById('hero-file'); if(hf) hf.click(); break; }
+    case 'hero-reset': { const hi=document.querySelector('form[data-form="adm-hero"] input[name="image"]'); const th=document.getElementById('hero-thumb'); if(hi) hi.value=IMG.hero; if(th) th.src=IMG.hero; toast('Reset to the default campaign image'); break; }
+    case 'cart-open': openCartDrawer(); break;
+    case 'cart-close': closeDrawer('cdrawer'); if (el.dataset.goto) go(el.dataset.goto.replace(/^#/,'')); break;
+    case 'goto-product': if (e.target.closest('.wish')) break; closeDrawer('cdrawer'); closeModal(); go('/product/'+el.dataset.slug); break;
+    case 'wish-toggle': {
+      const added = toggleWish(el.dataset.pid);
+      toast(added?'Saved to wishlist':'Removed from wishlist');
+      document.querySelectorAll('[data-action="wish-toggle"][data-pid="'+el.dataset.pid+'"]').forEach(b=>b.classList.toggle('on',added));
+      const pw = document.getElementById('pd-wish'); if (pw && el.dataset.pid===PDP.pid) pw.textContent = added?'♥ SAVED TO WISHLIST':'♡ ADD TO WISHLIST';
+      break; }
+    case 'quick-add': openQuickAdd(el.dataset.pid); break;
+    case 'qa-size': {
+      const p = DB.products.find(x=>x.id===el.dataset.pid);
+      const r = addToCart(p.id, p.colors[0].name, el.dataset.size, 1);
+      if (r.ok){ closeModal(); openCartDrawer(); refreshBagCount(); } else toast(r.msg, true);
+      break; }
+    case 'size-guide': openSizeGuide(el.dataset.pid); break;
+    case 'review-open': openReviewForm(el.dataset.pid||PDP.pid); break;
+    case 'goto-account': closeModal(); go('/account'); break;
+    case 'pd-thumb': PDP.img = +el.dataset.i; pdRefresh(); break;
+    case 'pd-zoom-toggle': if (matchMedia('(hover:none)').matches) el.classList.toggle('zoom'); break;
+    case 'pd-color': {
+      const p = DB.products.find(x=>x.id===PDP.pid);
+      PDP.color = p.colors[+el.dataset.i].name; PDP.img = p.colors[+el.dataset.i].img||0;
+      document.querySelectorAll('.swatch').forEach((s,i)=>s.classList.toggle('on', i===+el.dataset.i));
+      const cn = document.getElementById('pd-color-name'); if (cn) cn.textContent = PDP.color;
+      pdRefresh(); break; }
+    case 'pd-size': PDP.size = el.dataset.size; PDP.qty = 1; pdRefresh(); break;
+    case 'pd-qty': {
+      const avail = stockOf(PDP.pid, PDP.color, PDP.size)||9;
+      PDP.qty = Math.max(1, Math.min((PDP.qty||1)+ +el.dataset.d, avail));
+      pdRefresh(); break; }
+    case 'pd-scroll-sizes': { const s=document.getElementById('pd-sizes'); if(s) s.scrollIntoView({behavior:'smooth',block:'center'}); break; }
+    case 'pd-add': case 'pd-buy': {
+      if (!PDP.size){ toast('Select a size first', true); const s=document.getElementById('pd-sizes'); if(s) s.scrollIntoView({behavior:'smooth',block:'center'}); break; }
+      const p = DB.products.find(x=>x.id===PDP.pid);
+      const r = addToCart(p.id, PDP.color, PDP.size, PDP.qty||1);
+      if (!r.ok){ toast(r.msg, true); pdRefresh(); break; }
+      refreshBagCount(); trackEvent('add_to_cart',{item:PDP.pid});
+      if (a==='pd-add'){ openCartDrawer(); }
+      else { go('/checkout'); }
+      break; }
+    case 'acc-toggle': el.closest('.acc').classList.toggle('open'); { const b=el.closest('.acc').querySelector('.acc-b'); b.style.maxHeight = el.closest('.acc').classList.contains('open')? b.scrollHeight+'px':''; } break;
+    case 'faq-toggle': el.closest('.faq-item').classList.toggle('open'); break;
+    case 'f-chip': {
+      const key = el.dataset.key, val = el.dataset.val;
+      const cur = (CURRENT_ROUTE.query[key]||'').split(',').filter(Boolean);
+      const i = cur.indexOf(val);
+      if (i>-1) cur.splice(i,1); else cur.push(val);
+      setQuery({[key]:cur.join(',')}); break; }
+    case 'f-check': {
+      const key = el.dataset.key, val = el.dataset.val;
+      const cur = (CURRENT_ROUTE.query[key]||'').split(',').filter(Boolean);
+      if (el.checked && !cur.includes(val)) cur.push(val);
+      if (!el.checked) setQuery({[key]:cur.filter(x=>x!==val).join(',')}); else setQuery({[key]:cur.join(',')});
+      break; }
+    case 'f-clear': go('/shop'); break;
+    /* ---- email a customer straight from the admin (opens mail app, prefilled) ---- */
+    case 'email-customer': {
+      const o = DB.orders.find(x=>x.no===el.dataset.no);
+      const subj = 'Your THE VERVE order'+(o? ' '+o.no:'');
+      const body = 'Hi '+(o? o.name:'there')+',\n\n'
+        +(o? 'An update on your order '+o.no+' (status: '+o.status+').':'')
+        +'\n\nThank you for shopping with THE VERVE.\n— THE VERVE team\n'+VERVE_CONFIG.contact.email;
+      window.location.href = 'mailto:'+el.dataset.email+'?subject='+encodeURIComponent(subj)+'&body='+encodeURIComponent(body);
+      break; }
+    case 'ci-qty': {
+      const calc = cartCalc(appliedCoupon());
+      updateCartItem(+el.dataset.i, calc.items[+el.dataset.i].qty + +el.dataset.d);
+      refreshBagCount();
+      if (CURRENT_ROUTE.route.page==='cart') render(); else openCartDrawer();
+      break; }
+    case 'ci-remove': {
+      updateCartItem(+el.dataset.i, 0); refreshBagCount(); toast('Removed from bag');
+      if (CURRENT_ROUTE.route.page==='cart') render(); else openCartDrawer();
+      break; }
+    case 'coupon-remove': setAppliedCoupon(''); render(); break;
+    case 'co-method': CO.method = el.dataset.m; render(); break;
+    case 'co-place': {
+      const f = document.querySelector('[data-form="checkout-details"]');
+      const d = Object.fromEntries(new FormData(f).entries());
+      const errs = validCheckoutDetails(d);
+      if (errs.length){ markCheckoutErrors(errs); break; }
+      CO.details = d;
+      const calc = cartCalc(appliedCoupon());
+      if (!calc.items.length){ toast('Your bag is empty', true); go('/cart'); break; }
+      if (CO.method==='cod'){
+        const o = await createOrder(calc, d, { method:'cod' });
+        go('/order-confirmation/'+o.no);
+      } else {
+        openPayModal(calc, d);
+      }
+      break; }
+    case 'pay-tab': CO.method = el.dataset.m; document.querySelectorAll('.pay-tabs .chip').forEach(c=>c.classList.remove('on')); el.classList.add('on'); document.getElementById('pay-body').innerHTML = payMethodBody(CO.method); break;
+    case 'pay-now': {
+      const btn = el; btn.disabled = true; btn.innerHTML = 'PROCESSING…';
+      btn.insertAdjacentHTML('afterend','<div class="spin"></div>');
+      await new Promise(r=>setTimeout(r,1500)); // gateway round-trip (demo)
+      // Production: server creates razorpay order, checkout.js opens it, and the
+      // order is only created after the server verifies the webhook signature.
+      const calc = cartCalc(appliedCoupon());
+      const o = await createOrder(calc, CO.details, { method:CO.method, status:'Paid', verified:true });
+      closeModal();
+      go('/order-confirmation/'+o.no);
+      break; }
+    case 'pay-fail': { closeModal(); toast('Payment failed (simulated) — no order was created', true); break; }
+    case 'view-email': { const em = DB.emails.find(x=>x.id===el.dataset.id); if (em) openModal('<h3 style="font-size:16px">'+esc(em.subject)+'</h3><div class="sub">To: '+esc(em.to)+' · '+dTime(em.at)+' · simulated Resend delivery</div><div style="border:1px solid var(--line);padding:.4rem">'+em.html+'</div>', true); break; }
+    case 'print-invoice': window.print(); break;
+    case 'req-cancel': askReason('Request cancellation of '+el.dataset.no, reason=>{ requestCancel(el.dataset.no, reason); toast('Cancellation requested'); render(); }); break;
+    case 'req-return': askReason('Request return for '+el.dataset.no, reason=>{ requestReturn(el.dataset.no, reason); toast('Return requested'); render(); }); break;
+    case 'logout': logoutSession(); toast('Signed out'); go('/'); break;
+    case 'auth-tab': AUTH_TAB = el.dataset.t; render(); break;
+    case 'forgot-open': openModal('<h3>Reset password</h3><div class="sub">We will email a reset link (simulated in this build).</div><form data-form="forgot"><div class="field"><label>Account email</label><input name="email" type="email" class="inp" required></div><button class="btn btn-solid btn-block">SEND RESET LINK</button></form>'); break;
+    case 'resend-code': { const cu=currentUser(); if(cu){ DB.emails.unshift({ id:uid('em'), kind:'verify', to:cu.email, subject:'THE VERVE — Your verification code', html:'<b>'+cu.verifyCode+'</b> is your THE VERVE verification code (demo email).', at:new Date().toISOString() }); saveDB(); toast('Verification code re-sent (see Admin → Marketing → Email log)'); } break; }
+    case 'addr-add': case 'addr-edit': {
+      const cu = currentUser(); if(!cu) break;
+      const ex = a==='addr-edit'? (cu.addresses||[]).find(x=>x.id===el.dataset.id) : null;
+      openModal('<h3>'+(ex?'Edit address':'New address')+'</h3><form data-form="addr" data-id="'+(ex?ex.id:'')+'">'+
+      '<div class="frow"><div class="field"><label>Label</label><input name="label" value="'+esc(ex?ex.label:'Home')+'"></div><div class="field"><label>House number</label><input name="line1" value="'+esc(ex?ex.line1:'')+'" required></div></div>'+
+      '<div class="field"><label>Street / Area</label><input name="area" value="'+esc(ex?ex.area:'')+'" required></div>'+
+      '<div class="frow"><div class="field"><label>City</label><input name="city" value="'+esc(ex?ex.city:'')+'" required></div><div class="field"><label>State</label><input name="state" value="'+esc(ex?ex.state:'')+'" required></div></div>'+
+      '<div class="field"><label>PIN code</label><input name="pin" maxlength="6" value="'+esc(ex?ex.pin:'')+'" required></div>'+
+      '<button class="btn btn-solid btn-block">SAVE ADDRESS</button></form>'); break; }
+    case 'addr-del': {
+      const cu = currentUser(); if(!cu) break;
+      cu.addresses = (cu.addresses||[]).filter(x=>x.id!==el.dataset.id); saveDB(); toast('Address deleted'); render(); break; }
+    /* -------- admin -------- */
+    case 'adm-edit': openProductEditor(el.dataset.pid); break;
+    case 'adm-del': {
+      const p = DB.products.find(x=>x.id===el.dataset.pid);
+      openModal('<h3>Delete product</h3><div class="sub">“'+esc(p?p.name:'')+'” will be removed from the storefront. Order history keeps its records.</div><div style="display:flex;gap:.8rem"><button class="btn btn-burgundy" data-action="adm-del-yes" data-pid="'+el.dataset.pid+'" style="flex:1">DELETE</button><button class="btn btn-line" data-close-modal style="flex:1">KEEP</button></div>');
+      document.querySelectorAll('#modal-box [data-close-modal]').forEach(b=>b.addEventListener('click',closeModal));
+      break; }
+    case 'adm-del-yes': { DB.products = DB.products.filter(x=>x.id!==el.dataset.pid); saveDB(); closeModal(); toast('Product deleted'); render(); break; }
+    case 'adm-pub': case 'adm-tgl-pub': {
+      const p = DB.products.find(x=>x.id===el.dataset.pid);
+      if (p){ p.published=!p.published; saveDB(); el.classList.toggle('on',p.published); toast(p.published?'Product published':'Product unpublished'); }
+      else el.classList.toggle('on');
+      break; }
+    case 'adm-status': break; // handled via change event
+    case 'adm-cust': openCustomerHistory(el.dataset.email); break;
+    case 'adm-coupon-tgl': { const c=DB.coupons.find(x=>x.code===el.dataset.code); if(c){ c.active=!c.active; saveDB(); el.classList.toggle('on',c.active); } break; }
+    case 'adm-coupon-del': { DB.coupons = DB.coupons.filter(x=>x.code!==el.dataset.code); saveDB(); toast('Coupon deleted'); render(); break; }
+    case 'adm-ann-tgl': { const an=DB.settings.announcements.find(x=>x.id===el.dataset.id); if(an){ an.active=!an.active; saveDB(); el.classList.toggle('on',an.active); } break; }
+    case 'adm-ann-del': { DB.settings.announcements = DB.settings.announcements.filter(x=>x.id!==el.dataset.id); saveDB(); render(); break; }
+    case 'adm-export-subs': {
+      const csv = 'email,subscribed_at\n'+DB.subscribers.map(s=>s.email+','+s.at).join('\n');
+      const url = URL.createObjectURL(new Blob([csv],{type:'text/csv'}));
+      const a2 = document.createElement('a'); a2.href=url; a2.download='verve-subscribers.csv'; a2.click(); URL.revokeObjectURL(url);
+      break; }
+    case 'adm-page-reset': { delete DB.settings.pages[el.dataset.slug]; saveDB(); toast('Page reset to default copy'); render(); break; }
+    case 'adm-reset': {
+      openModal('<h3>Reset demo data?</h3><div class="sub">All products, orders and accounts return to the seeded demo state.</div><div style="display:flex;gap:.8rem"><button class="btn btn-burgundy" onclick="resetDemoData()" style="flex:1">RESET NOW</button><button class="btn btn-line" data-close-modal style="flex:1">CANCEL</button></div>');
+      document.querySelectorAll('#modal-box [data-close-modal]').forEach(b=>b.addEventListener('click',closeModal));
+      break; }
+    case 'adm-run-tests': runTestsUI(); break;
+    case 'adm-rev-approve': { const r=DB.reviews.find(x=>x.id===el.dataset.id); if(r){ r.status='approved'; saveDB(); toast('Review published'); render(); } break; }
+    case 'adm-rev-del': { DB.reviews = DB.reviews.filter(x=>x.id!==el.dataset.id); saveDB(); toast('Review deleted'); render(); break; }
+    case 'adm-req-approve': {
+      const r = DB.returns.find(x=>x.id===el.dataset.id); if(!r) break;
+      const o = DB.orders.find(x=>x.no===r.orderNo);
+      r.status='Approved';
+      if (o){
+        o.status = r.type==='cancel'? 'Cancelled':'Returned';
+        o.timeline.push({status:o.status, at:new Date().toISOString()});
+        if (o.payment.method==='razorpay' && o.payment.status==='Paid'){ o.payment.status='Refunded'; sendEmail('refund', o.email, {no:o.no, amount:o.total}); }
+        else sendEmail('statusUpdate', o.email, { no:o.no, status:o.status });
+      }
+      saveDB(); toast('Request approved'); render(); break; }
+    case 'adm-req-decline': { const r = DB.returns.find(x=>x.id===el.dataset.id); if(r){ r.status='Declined'; const o=DB.orders.find(x=>x.no===r.orderNo); if(o) sendEmail('statusUpdate',o.email,{no:o.no,status:'Request declined — our team will contact you'}); saveDB(); toast('Request declined'); render(); } break; }
+  }
+});
+// keyboard activation for card "links"
+document.addEventListener('keydown', e=>{
+  if ((e.key==='Enter'||e.key===' ') && e.target.dataset && e.target.dataset.action && e.target.getAttribute('role')==='link'){ e.preventDefault(); e.target.click(); }
+});
+// change events (sort, order status)
+document.addEventListener('change', async e=>{
+  const el = e.target;
+  if (el.matches('[data-action="f-sort"]')) setQuery({sort:el.value});
+  if (el.matches('[data-action="adm-status"]')){
+    const o = DB.orders.find(x=>x.no===el.dataset.no);
+    if (o && o.status!==el.value){
+      o.status = el.value; o.updatedAt = new Date().toISOString();
+      if (o.timeline[o.timeline.length-1].status!==o.status) o.timeline.push({status:o.status, at:o.updatedAt});
+      if (el.value==='Refunded' && o.payment.status==='Paid') o.payment.status='Refunded';
+      sendEmail('statusUpdate', o.email, { no:o.no, status:o.status, awb:o.awb });
+      saveDB(); toast('Order '+o.no+' → '+o.status);
+    }
+  }
+});
+// AWB blur save
+document.addEventListener('focusout', e=>{
+  const el = e.target;
+  if (el.matches('[data-action-blur="adm-awb"]')){
+    const o = DB.orders.find(x=>x.no===el.dataset.no);
+    if (o && o.awb!==el.value.trim()){ o.awb = el.value.trim(); o.updatedAt=new Date().toISOString(); saveDB(); toast('AWB saved — customer can track'); }
+  }
+});
+// PDP zoom (desktop)
+document.addEventListener('mousemove', e=>{
+  const m = e.target.closest && e.target.closest('.pdp-main');
+  if (m && matchMedia('(hover:hover)').matches){
+    const r = m.getBoundingClientRect();
+    m.style.setProperty('--zx', ((e.clientX-r.left)/r.width*100)+'%');
+    m.style.setProperty('--zy', ((e.clientY-r.top)/r.height*100)+'%');
+    const img = m.querySelector('img'); if (img) img.style.transformOrigin = m.style.getPropertyValue('--zx')+' '+m.style.getPropertyValue('--zy');
+  }
+});
+document.addEventListener('mouseover', e=>{
+  const m = e.target.closest && e.target.closest('.pdp-main');
+  if (m && matchMedia('(hover:hover)').matches) m.classList.add('zoom');
+});
+document.addEventListener('mouseout', e=>{
+  const m = e.target.closest && e.target.closest('.pdp-main');
+  if (m) m.classList.remove('zoom');
+});
+
+/* ---------- forms ---------- */
+document.addEventListener('change', e=>{
+  if (e.target && e.target.id==='pf-file' && e.target.files && e.target.files.length){
+    pfAddFiles(e.target.files); e.target.value=''; // reset so picking the same file twice still fires
+  }
+  if (e.target && e.target.id==='hero-file' && e.target.files && e.target.files.length){
+    handleHeroFile(e.target.files); e.target.value='';
+  }
+});
+/* hero image drop zone (admin → content) — delegated so it works whenever the page mounts */
+document.addEventListener('dragover', e=>{ const dz=e.target.closest&&e.target.closest('#hero-drop'); if(dz){ e.preventDefault(); dz.classList.add('over'); } });
+document.addEventListener('dragleave', e=>{ const dz=e.target.closest&&e.target.closest('#hero-drop'); if(dz) dz.classList.remove('over'); });
+document.addEventListener('drop', e=>{
+  const dz = e.target.closest && e.target.closest('#hero-drop');
+  if (!dz) return;
+  e.preventDefault(); dz.classList.remove('over');
+  if (e.dataTransfer && e.dataTransfer.files.length) handleHeroFile(e.dataTransfer.files);
+});
+document.addEventListener('submit', async e=>{
+  const f = e.target.closest('[data-form]');
+  if (!f) return;
+  e.preventDefault();
+  const kind = f.dataset.form;
+  const d = Object.fromEntries(new FormData(f).entries());
+  switch(kind){
+    case 'checkout-details': { const b=document.querySelector('[data-action="co-place"]'); if(b) b.click(); break; }
+    case 'newsletter': {
+      if (!validEmail(d.email)) { toast('Enter a valid email', true); break; }
+      if (!DB.subscribers.some(s=>s.email===d.email.toLowerCase())) DB.subscribers.push({ email:d.email.toLowerCase(), at:new Date().toISOString() });
+      sendEmail('welcome', d.email.toLowerCase(), {}); saveDB();
+      f.reset(); const ok=document.getElementById('news-ok'); if (ok) ok.classList.remove('hidden');
+      toast('Subscribed — welcome to the list'); break; }
+    case 'pin': {
+      const res = document.getElementById('pin-res');
+      if (!validPin(d.pin)){ res.textContent='Enter a valid 6-digit PIN code (e.g. 400050).'; break; }
+      await new Promise(r=>setTimeout(r,450));
+      const metro = ['1','4','5','6'].includes(d.pin[0]);
+      res.innerHTML = '<b>✓ Delivers to '+esc(d.pin)+'</b> — indicative '+ (metro?'2–4':'4–7') +' business days · COD available · Free above '+fmt(DB.settings.shipping.freeAbove);
+      break; }
+    case 'coupon': {
+      const v = validateCoupon(d.code);
+      if (v.ok){ setAppliedCoupon(v.coupon.code); toast(v.msg); render(); } else toast(v.msg, true);
+      break; }
+    case 'track': go('/track-order?no='+encodeURIComponent(d.no.trim())); break;
+    case 'contact': {
+      if (!d.name||!validEmail(d.email)||!d.message){ toast('Fill all fields', true); break; }
+      DB.messages.unshift({ id:uid('m'), name:d.name, email:d.email, subject:d.subject, message:d.message, at:new Date().toISOString(), handled:false });
+      DB.emails.unshift({ id:uid('em'), kind:'contact', to:VERVE_CONFIG.contact.email, subject:'[Contact] '+d.subject+' — '+d.name, html:'<p>'+esc(d.message)+'</p><p>From '+esc(d.name)+' ('+esc(d.email)+')</p>', at:new Date().toISOString() });
+      saveDB(); f.reset();
+      /* functional email: hand the message to the visitor's own mail app, addressed to the company inbox */
+      const mailHref = 'mailto:'+VERVE_CONFIG.contact.email
+        +'?subject='+encodeURIComponent('[THE VERVE] '+d.subject+' — '+d.name)
+        +'&body='+encodeURIComponent(d.message+'\n\n— '+d.name+' ('+d.email+')');
+      toast('Opening your mail app — press send there and it lands in our team inbox');
+      setTimeout(function(){ window.location.href = mailHref; }, 450);
+      break; }
+    case 'review': {
+      const cu = currentUser(); if(!cu){ toast('Sign in to review', true); break; }
+      DB.reviews.push({ id:uid('rv'), pid:f.dataset.pid, userId:cu.id, name:cu.name, rating:+d.rating, title:d.title, body:d.body, status:'pending', at:new Date().toISOString() });
+      saveDB(); closeModal(); toast('Review submitted — published after moderation');
+      break; }
+    case 'login': {
+      const r = await doLogin(d.email, d.pass);
+      if (!r.ok){ toast(r.msg, true); break; }
+      if (r.admin){ go('/admin'); } else { toast(r.msg); go('/account'); }
+      break; }
+    case 'register': {
+      if (!validEmail(d.email)){ toast('Enter a valid email', true); break; }
+      if ((d.pass||'').length<8){ toast('Password must be at least 8 characters', true); break; }
+      if (d.phone && !validPhone(d.phone)){ toast('Enter a valid 10-digit mobile', true); break; }
+      const r = await doRegister(d.name, d.email, d.pass, d.phone);
+      if (!r.ok){ toast(r.msg, true); break; }
+      toast(r.msg); render(); break; }
+    case 'admin-login': {
+      const r = await doLogin(d.email, d.pass);
+      if (!r.ok || !r.admin){ toast('Invalid admin credentials', true); break; }
+      go('/admin'); break; }
+    case 'profile': {
+      const cu = currentUser(); if(!cu) break;
+      if (d.phone && !validPhone(d.phone)){ toast('Enter a valid 10-digit mobile', true); break; }
+      cu.name = d.name; cu.phone = d.phone; saveDB(); toast('Profile updated'); render(); break; }
+    case 'verify': {
+      const cu = currentUser(); if(!cu) break;
+      if (d.code === cu.verifyCode){ cu.verified = true; delete cu.verifyCode; saveDB(); toast('Email verified ✓'); render(); }
+      else toast('Incorrect code — check the simulated email', true);
+      break; }
+    case 'password': {
+      const cu = currentUser(); if(!cu) break;
+      if (await sha256(d.cur) !== cu.passHash){ toast('Current password is incorrect', true); break; }
+      if ((d.next||'').length<8){ toast('New password must be 8+ characters', true); break; }
+      cu.passHash = await sha256(d.next); saveDB(); toast('Password updated'); break; }
+    case 'addr': {
+      const cu = currentUser(); if(!cu) break;
+      if (!cu.addresses) cu.addresses=[];
+      const payload = { label:d.label||'Home', line1:d.line1, area:d.area, city:d.city, state:d.state, pin:d.pin, country:'India' };
+      if (!validPin(d.pin)){ toast('Enter a valid PIN', true); break; }
+      const id = f.dataset.id;
+      if (id){ const ex = cu.addresses.find(x=>x.id===id); Object.assign(ex, payload); }
+      else cu.addresses.push({ id:uid('adr'), ...payload });
+      saveDB(); closeModal(); toast('Address saved'); render(); break; }
+    case 'forgot': {
+      if (!validEmail(d.email)){ toast('Enter a valid email', true); break; }
+      DB.emails.unshift({ id:uid('em'), kind:'reset', to:d.email, subject:'THE VERVE — Reset your password', html:'<p>A password reset link would be emailed here (demo). Production uses signed, expiring tokens.</p>', at:new Date().toISOString() });
+      saveDB(); closeModal(); toast('Reset link sent (see Admin → Marketing → Email log)'); break; }
+    /* -------- admin forms -------- */
+    case 'adm-search': e.preventDefault(); go('/admin/'+(CURRENT_ROUTE.params[0]||'dashboard')+'?q='+encodeURIComponent(d.q||'')); break;
+    case 'adm-product': {
+      const isNew = f.dataset.pid==='new';
+      const colors = d.colors.split(',').map(s=>s.trim()).filter(Boolean).map(s=>{ const [n,h]=s.split(':'); return { name:(n||'').trim(), hex:(h||'#999').trim() }; });
+      const sizes = d.sizes.split(',').map(s=>s.trim()).filter(Boolean);
+      const tags = ['new','featured','bestseller','limited'].filter(t=>d['tag-'+t]);
+      const images = (ADM.pfImages||[]).filter(Boolean);
+      const published = document.getElementById('pf-pub').classList.contains('on');
+      if (!colors.length || !sizes.length){ toast('Add at least one colour and size', true); break; }
+      let p;
+      if (isNew){
+        p = { id:uid('p'), slug:(d.name||'product').toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'')+'-'+Math.random().toString(36).slice(2,5), sku:d.sku||('TV-CUS-'+Math.floor(Math.random()*900+100)), createdAt:new Date().toISOString().slice(0,10), demo:false, published };
+        DB.products.push(p);
+      } else {
+        p = DB.products.find(x=>x.id===f.dataset.pid); if(!p){ toast('Not found', true); break; }
+        p.published = published;
+      }
+      Object.assign(p, { name:d.name, sku:d.sku, category:d.category, fit:d.fit, gsm:+d.gsm||240, material:d.material, price:+d.price, mrp:+d.mrp, description:d.description, care:(d.care||'').split('\n').map(s=>s.trim()).filter(Boolean), colors, sizes, images: images.length?images:[''], tags });
+      // inventory inputs
+      f.querySelectorAll('[data-inv]').forEach(inp=>{
+        const [pid,color,size] = inp.dataset.inv.split('::');
+        DB.inventory[p.id+'::'+color+'::'+size] = Math.max(0, +inp.value||0);
+      });
+      saveDB(); ADM.pfImages = []; closeModal(); toast(isNew?'Product added':'Product updated'); go('/admin/products'); render(); break; }
+    case 'adm-coupon': {
+      const code = (d.code||'').toUpperCase().trim();
+      if (!code){ toast('Enter a code', true); break; }
+      if (DB.coupons.some(x=>x.code===code)){ toast('Coupon code already exists', true); break; }
+      DB.coupons.push({ code, type:d.type, value:+d.value||0, min:+d.min||0, active:true, usageLimit:0, used:0, note:(d.type==='percent'? d.value+'% off' : d.type==='flat'? fmt(+d.value)+' off' : 'Free shipping')+' above ₹'+d.min });
+      saveDB(); toast('Coupon created'); render(); break; }
+    case 'adm-ann': { DB.settings.announcements.push({ id:uid('a'), text:(d.text||'').toUpperCase(), active:true }); saveDB(); toast('Announcement added'); render(); break; }
+    case 'adm-hero': {
+      Object.assign(DB.settings.hero, { kicker:d.kicker, line1:d.line1.toUpperCase(), line2:d.line2, sub:d.sub, cta1:d.cta1, cta2:d.cta2, image:d.image||IMG.hero });
+      saveDB(); toast('Hero updated — open the storefront to see it'); break; }
+    case 'adm-social': { DB.settings.social.instagram = d.instagram; VERVE_CONFIG.contact.email = d.email; saveDB(); toast('Saved (session scope in demo)'); break; }
+    case 'adm-page': {
+      DB.settings.pages[f.dataset.slug] = { title:d.title, html:d.html };
+      saveDB(); toast('Page saved'); break; }
+    case 'adm-shipping': { Object.assign(DB.settings.shipping, { freeAbove:+d.freeAbove||1999, flat:+d.flat||99, codFee:+d.codFee||49 }); saveDB(); toast('Shipping rules saved'); break; }
+  }
+});
+
+/* ---------- per-page binding ---------- */
+function bindPage(parsed){
+  buildAnnouncement();
+  // transparent header over home hero
+  const header = document.getElementById('site-header');
+  if (header && parsed.route.page==='home'){
+    header.classList.add('transparent');
+    const ann = document.getElementById('announce');
+    const onScroll = ()=>{
+      header.classList.toggle('solidify', window.scrollY>60);
+      header.style.top = header.classList.contains('solidify') ? '0px' : (ann? ann.offsetHeight:0)+'px';
+    };
+    window.removeEventListener('scroll', window.__hdrScroll||(()=>{}));
+    window.__hdrScroll = onScroll;
+    window.addEventListener('scroll', onScroll, {passive:true});
+    window.addEventListener('resize', onScroll, {passive:true});
+    onScroll();
+  }
+  if (parsed.route.page==='product') pdRefresh();
+}
+
+/* ---------- boot ---------- */
+(async function boot(){
+  await loadDB();
+  initAnalytics();
+  window.addEventListener('hashchange', render);
+  await render();
+})();
+</script>
+</body>
+</html>

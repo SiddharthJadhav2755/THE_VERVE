@@ -1,0 +1,248 @@
+<script>
+/* ============================================================
+   STOREFRONT — home, shop, collections, product, static pages
+   ============================================================ */
+const PAGES = {};
+
+/* ---------- shared product card ---------- */
+function productCard(p, opts){
+  opts = opts||{};
+  const off = p.mrp>p.price ? Math.round((1-p.price/p.mrp)*100) : 0;
+  const stock = totalStock(p);
+  const wished = wishList().includes(p.id);
+  const tags = [];
+  if (p.tags.includes('limited')) tags.push('<span class="badge b-dark">Limited</span>');
+  if (stock===0) tags.push('<span class="badge b-line">Sold Out</span>');
+  else if (p.tags.includes('new')) tags.push('<span class="badge b-burgundy">New</span>');
+  if (off>0) tags.push('<span class="badge b-gold">'+off+'% Off</span>');
+  return '<article class="p-card'+(stock===0?' out':'')+(opts.rail?'':' rv')+'" style="--d:'+(opts.i||0)*0.07+'s">'+
+    '<div class="media" data-action="goto-product" data-slug="'+p.slug+'" role="link" tabindex="0" aria-label="'+esc(p.name)+'">'+
+      (tags.length? '<div class="tags">'+tags.join('')+'</div>' : '')+
+      imgTag(p.images[0], p.name, 'main')+
+      (p.images[1]? imgTag(p.images[1], p.name+' alternate', 'alt') : '')+
+      '<button class="wish'+(wished?' on':'')+'" data-action="wish-toggle" data-pid="'+p.id+'" aria-label="Toggle wishlist">'+svgIc('heart')+'</button>'+
+      '<div class="quick"><button class="btn" data-action="quick-add" data-pid="'+p.id+'">'+(stock===0?'SOLD OUT':'QUICK ADD')+'</button></div>'+
+    '</div>'+
+    '<div class="info">'+
+      '<div class="name" data-action="goto-product" data-slug="'+p.slug+'" role="link" tabindex="0">'+esc(p.name)+'</div>'+
+      '<div class="cat">'+esc(catName(p.category))+' · '+esc(p.fit)+' Fit</div>'+
+      '<div class="price"><span class="mono-nums">'+fmt(p.price)+'</span>'+(p.mrp>p.price?'<span class="mrp mono-nums">'+fmt(p.mrp)+'</span><span class="off">SAVE '+off+'%</span>':'')+'</div>'+
+    '</div></article>';
+}
+function catName(slug){ const c=DB.categories.find(x=>x.slug===slug); return c?c.name:'Collection'; }
+
+/* ---------- QUICK ADD modal ---------- */
+function openQuickAdd(pid){
+  const p = DB.products.find(x=>x.id===pid); if(!p) return;
+  const c = p.colors[0];
+  const rows = p.sizes.map(s=>{
+    const q = stockOf(p.id, c.name, s);
+    return '<button class="size-b" data-action="qa-size" data-pid="'+p.id+'" data-size="'+esc(s)+'" '+(q<=0?'disabled':'')+'>'+esc(s)+(q<=0?'<span class="so"></span>':'')+'</button>';
+  }).join('');
+  openModal('<h3>'+esc(p.name)+'</h3><div class="sub">'+esc(catName(p.category))+' · '+esc(p.fit)+' Fit · '+esc(c.name)+'</div>'+
+    '<div class="opt-block"><div class="lbl"><h4>Select Size</h4><button class="mini-link" data-action="size-guide" data-pid="'+p.id+'">SIZE GUIDE</button></div><div class="sizes">'+rows+'</div></div>'+
+    '<div class="notice">Select a size to add — inventory updates live per size.</div>');
+}
+
+/* ============================================================
+   HOME
+   ============================================================ */
+PAGES.home = async function(){
+  const h = DB.settings.hero;
+  const featured = DB.products.filter(p=>p.published && p.tags.includes('featured')).slice(0,4);
+  const best = DB.products.filter(p=>p.published && p.tags.includes('bestseller')).slice(0,6);
+  const aboutHtml = (DB.settings.pages.about ? DB.settings.pages.about.html : DEFAULT_PAGES.about.html);
+  return chromeShell(
+  /* HERO */
+  '<section class="hero" id="hero"><div class="bg">'+imgTag(h.image,'THE VERVE campaign — '+esc(h.line1+' '+h.line2))+'</div><div class="veil"></div>'+
+    '<div class="in"><div class="kick">'+esc(h.kicker)+'</div>'+
+    '<h1><span class="ln">'+esc(h.line1)+'</span><span class="ln"><em>'+esc(h.line2)+'</em></span></h1>'+
+    '<p class="sub">'+esc(h.sub)+'</p>'+
+    '<div class="cta"><a class="btn btn-solid" href="#/shop">'+esc(h.cta1)+'</a><a class="btn btn-ghost on-dark" href="#/about">'+esc(h.cta2)+'</a></div></div>'+
+    '<div class="scroll-cue">SCROLL</div></section>'+
+  /* MARQUEE */
+  '<div class="marquee" aria-hidden="true"><div class="track">'+
+    Array(2).fill('<span>OVERSIZED</span><i>·</i><span>HEAVYWEIGHT 240–400 GSM</span><i>·</i><span>LIMITED EDITIONS</span><i>·</i><span>MADE FOR INDIA</span><i>·</i><span>FREE SHIPPING ABOVE ₹1,999</span><i>·</i>').join('')+
+  '</div></div>'+
+  /* FEATURED */
+  '<section class="block"><div class="container-w">'+
+    '<div class="sec-head rv"><div><div class="eyebrow">THE EDIT</div><h2 style="margin-top:.5rem">Featured Collection</h2>'+
+    '<p class="sub">Statement pieces from Atelier 001 — cut heavy, dyed deep, finished by hand.</p></div>'+
+    '<a class="link-u" href="#/shop">VIEW ALL</a></div>'+
+    '<div class="grid-p">'+featured.map((p,i)=>productCard(p,{i})).join('')+'</div>'+
+  '</div></section>'+
+  /* CATEGORIES */
+  '<section class="block" style="background:var(--paper-2)"><div class="container-w">'+
+    '<div class="sec-head rv"><div><div class="eyebrow">WARDROBE INDEX</div><h2 style="margin-top:.5rem">Shop by Category</h2></div></div>'+
+    '<div class="tiles">'+
+      DB.categories.map((c,i)=>'<a class="tile rv" style="--d:'+i*0.06+'s" href="#/collections/'+c.slug+'">'+imgTag(c.image,c.name)+'<div class="veil"></div><div class="t"><span>0'+(i+1)+' — '+esc(c.tagline)+'</span><h3>'+esc(c.name)+'</h3></div></a>').join('')+
+    '</div></div></section>'+
+  /* BEST SELLERS */
+  '<section class="block"><div class="container-w">'+
+    '<div class="sec-head rv"><div><div class="eyebrow">MOST WANTED</div><h2 style="margin-top:.5rem">Best Sellers</h2></div>'+
+    '<a class="link-u" href="#/collections/best-sellers">VIEW ALL</a></div>'+
+    '<div class="rv-rail rv">'+best.map((p,i)=>productCard(p,{rail:true,i})).join('')+'</div>'+
+  '</div></section>'+
+  /* PHILOSOPHY */
+  '<section class="dark"><div class="split">'+
+    '<div class="ph">'+imgTag(IMG.philosophy,'THE VERVE atelier campaign')+'</div>'+
+    '<div class="tx rv"><div class="eyebrow gold">THE HOUSE</div>'+
+      '<h2 style="margin-top:.7rem">NOT MADE<br>TO FOLLOW.</h2>'+
+      '<p>THE VERVE is an expression of individuality, confidence, and timeless style. We build in heavyweight cottons and muted, architectural tones — because presence does not need noise, it needs weight.</p>'+
+      '<p>Every block is drawn with intent: dropped shoulders, extended hems, collars that hold. Limited runs. Numbered editions. Nothing careless, nothing borrowed.</p>'+
+      '<a class="btn btn-ghost on-dark" href="#/about" style="align-self:flex-start">READ OUR STORY</a>'+
+      '<div class="vals"><div><b>240–450</b><span>GSM FABRIC WEIGHT</span></div><div><b>7-DAY</b><span>EASY RETURNS</span></div><div><b>1 OF 150</b><span>NUMBERED LIMITEDS</span></div></div>'+
+    '</div></div></section>'+
+  /* CAMPAIGN */
+  '<section class="dark" style="padding-top:0"><div class="container-w" style="padding-bottom:clamp(3.6rem,9vw,7.5rem)">'+
+    '<div class="sec-head rv"><div><div class="eyebrow gold">ATELIER 001</div><h2 style="margin-top:.5rem">The Campaign</h2></div></div>'+
+    '<div class="mosaic rv">'+
+      '<div class="m tall">'+imgTag(IMG.campaign[0],'Campaign look one')+'</div>'+
+      '<div class="m wide">'+imgTag(IMG.campaign[1],'Campaign look two')+'<div class="cap">LOOK 02 — VANTAGE OVERSIZED</div></div>'+
+      '<div class="m">'+imgTag(IMG.campaign[2],'Campaign look three')+'</div>'+
+      '<div class="m tall">'+imgTag(IMG.campaign[3],'Campaign look four')+'<div class="cap">LOOK 04 — NOCTURNE</div></div>'+
+      '<div class="m">'+imgTag(IMG.campaign[4],'Campaign look five')+'</div>'+
+      '<div class="m wide">'+imgTag(IMG.campaign[5],'Campaign look six')+'</div>'+
+    '</div></div></section>'+
+  /* INSTAGRAM */
+  '<section class="block" style="padding-bottom:0"><div class="container-w">'+
+    '<div class="sec-head rv"><div><div class="eyebrow">THE COMMUNITY</div><h2 style="margin-top:.5rem">'+esc(VERVE_CONFIG.igHandle)+'</h2></div>'+
+    '<a class="link-u" href="'+esc(DB.settings.social.instagram)+'" target="_blank" rel="noopener">FOLLOW US</a></div>'+
+    '<div class="insta rv">'+IMG.insta.slice(0,6).map((u,i)=>'<a class="ig" href="'+esc(DB.settings.social.instagram)+'" target="_blank" rel="noopener" aria-label="Instagram post '+(i+1)+'">'+imgTag(u,'Instagram '+i)+'<div class="ov">'+svgIc('insta')+'</div></a>').join('')+'</div>'+
+    '<p class="center" style="color:var(--muted);font-size:11px;letter-spacing:.26em;text-transform:uppercase;margin-top:1.2rem">Tag '+esc(VERVE_CONFIG.igHandle)+' with #DefineYourPresence to be featured</p>'+
+  '</div></section>'+
+  /* NEWSLETTER */
+  '<section class="news"><div class="container rv">'+
+    '<div class="eyebrow gold" style="color:var(--gold)">THE LIST</div>'+
+    '<h2 style="margin-top:.6rem">Join the inner circle.</h2>'+
+    '<p>First access to limited drops, private previews and stories from the atelier. No noise — only what matters.</p>'+
+    '<form data-form="newsletter" novalidate><input type="email" name="email" placeholder="Your email address" aria-label="Email address" required><button type="submit">SUBSCRIBE</button></form>'+
+    '<div class="ok hidden" id="news-ok">WELCOME TO THE LIST.</div>'+
+  '</div></section>');
+};
+
+/* ============================================================
+   SHOP
+   ============================================================ */
+function shopFilterState(query){
+  return {
+    /* plural keys are what the filter UI writes; singular kept for legacy footer links */
+    cats: (query.cats||query.cat||'').split(',').filter(Boolean),
+    sizes: (query.sizes||query.size||'').split(',').filter(Boolean),
+    colors: (query.colors||query.color||'').split(',').filter(Boolean),
+    fits: (query.fits||query.fit||'').split(',').filter(Boolean),
+    price: (query.price||'').split(',').filter(Boolean),
+    sort: query.sort||'featured',
+    q: query.q||''
+  };
+}
+function applyShopFilters(st){
+  let list = DB.products.filter(p=>p.published);
+  if (st.q) list = list.filter(p=> (p.name+' '+p.category+' '+p.material).toLowerCase().includes(st.q.toLowerCase()));
+  if (st.cats.length) list = list.filter(p=>st.cats.includes(p.category));
+  if (st.sizes.length) list = list.filter(p=>p.sizes.some(s=>st.sizes.includes(s)));
+  if (st.colors.length) list = list.filter(p=>p.colors.some(c=>st.colors.includes(c.name)));
+  if (st.fits.length) list = list.filter(p=>st.fits.includes(p.fit));
+  if (st.price.length){
+    list = list.filter(p=> st.price.some(r=>{
+      if (r==='u1500') return p.price<1500;
+      if (r==='1500-2500') return p.price>=1500&&p.price<=2500;
+      if (r==='2500-4000') return p.price>2500&&p.price<=4000;
+      if (r==='a4000') return p.price>4000;
+      return true;
+    }));
+  }
+  const sorters = {
+    featured:(a,b)=> (b.tags.includes('featured')-a.tags.includes('featured')) || (b.tags.includes('bestseller')-a.tags.includes('bestseller')),
+    newest:(a,b)=> new Date(b.createdAt)-new Date(a.createdAt),
+    'price-asc':(a,b)=>a.price-b.price,
+    'price-desc':(a,b)=>b.price-a.price,
+    bestselling:(a,b)=> (b.tags.includes('bestseller')-a.tags.includes('bestseller'))
+  };
+  list.sort(sorters[st.sort]||sorters.featured);
+  return list;
+}
+function setQuery(patch){
+  const cur = CURRENT_ROUTE.query||{};
+  const next = {...cur, ...patch};
+  Object.keys(next).forEach(k=>{ if(next[k]===''||next[k]==null) delete next[k]; });
+  go('/shop'+(Object.keys(next).length?'?'+new URLSearchParams(next):''));
+}
+PAGES.shop = async function(parsed){
+  const st = shopFilterState(parsed.query||{});
+  const all = DB.products.filter(p=>p.published);
+  const allColors = [...new Set(all.flatMap(p=>p.colors.map(c=>c.name)))].sort();
+  const allFits = [...new Set(all.map(p=>p.fit))];
+  const allSizes = ['XS','S','M','L','XL','XXL','28','30','32','34','36'];
+  const list = applyShopFilters(st);
+  const chip = (label, key, val, on) => '<button class="chip'+(on?' on':'')+'" data-action="f-chip" data-key="'+key+'" data-val="'+esc(val)+'">'+esc(label)+'</button>';
+  return chromeShell(
+  '<section class="page-hero"><div class="container-w">'+
+    '<div class="crumbs"><a href="#/">HOME</a> &nbsp;/&nbsp; SHOP</div>'+
+    '<h1>Shop All</h1><p class="sub" style="color:var(--muted);margin-top:.6rem;max-width:60ch">The full index of THE VERVE — oversized blocks, heavyweight staples and numbered limiteds. <span style="color:var(--burgundy)">Demo catalogue</span> — sample products until the real line is uploaded.</p>'+
+  '</div></section>'+
+  '<section style="padding-bottom:4rem"><div class="container-w shop-layout">'+
+    '<aside class="filters" aria-label="Filters">'+
+      '<div class="fgroup"><h4>Category</h4>'+DB.categories.map(c=>'<label><input type="checkbox" data-action="f-check" data-key="cats" data-val="'+c.slug+'" '+(st.cats.includes(c.slug)?'checked':'')+'> '+esc(c.name)+'</label>').join('')+'</div>'+
+      '<div class="fgroup"><h4>Size</h4><div style="display:flex;flex-wrap:wrap;gap:.4rem">'+allSizes.map(s=>chip(s,'sizes',s,st.sizes.includes(s))).join('')+'</div></div>'+
+      '<div class="fgroup"><h4>Colour</h4><div class="sw-row">'+allColors.map(cn=>{ const hex=(all.flatMap(p=>p.colors).find(c=>c.name===cn)||{}).hex||'#999'; return '<button class="sw'+(st.colors.includes(cn)?' on':'')+'" title="'+esc(cn)+'" data-action="f-chip" data-key="colors" data-val="'+esc(cn)+'" style="background:'+esc(hex)+'" aria-label="'+esc(cn)+'"></button>'; }).join('')+'</div></div>'+
+      '<div class="fgroup"><h4>Fit</h4>'+allFits.map(f=>'<label style="text-transform:uppercase;font-size:11px;letter-spacing:.14em"><input type="checkbox" data-action="f-check" data-key="fits" data-val="'+esc(f)+'" '+(st.fits.includes(f)?'checked':'')+'> '+esc(f)+'</label>').join('')+'</div>'+
+      '<div class="fgroup"><h4>Price</h4>'+
+        '<label><input type="checkbox" data-action="f-check" data-key="price" data-val="u1500" '+(st.price.includes('u1500')?'checked':'')+'> Under ₹1,500</label>'+
+        '<label><input type="checkbox" data-action="f-check" data-key="price" data-val="1500-2500" '+(st.price.includes('1500-2500')?'checked':'')+'> ₹1,500 – ₹2,500</label>'+
+        '<label><input type="checkbox" data-action="f-check" data-key="price" data-val="2500-4000" '+(st.price.includes('2500-4000')?'checked':'')+'> ₹2,500 – ₹4,000</label>'+
+        '<label><input type="checkbox" data-action="f-check" data-key="price" data-val="a4000" '+(st.price.includes('a4000')?'checked':'')+'> Above ₹4,000</label></div>'+
+      '<div class="fgroup" style="border-bottom:1px solid var(--line)"><button class="mini-link" data-action="f-clear">CLEAR ALL FILTERS</button></div>'+
+    '</aside>'+
+    '<div><div class="toolbar"><div class="cnt">'+list.length+' PRODUCT'+(list.length===1?'':'S')+'</div>'+
+      '<label style="font-size:10.5px;letter-spacing:.2em;color:var(--muted);text-transform:uppercase;display:flex;gap:.7rem;align-items:center">Sort'+
+      '<select class="sel" data-action="f-sort">'+
+        '<option value="featured"'+(st.sort==='featured'?' selected':'')+'>Featured</option>'+
+        '<option value="newest"'+(st.sort==='newest'?' selected':'')+'>Newest</option>'+
+        '<option value="bestselling"'+(st.sort==='bestselling'?' selected':'')+'>Best Selling</option>'+
+        '<option value="price-asc"'+(st.sort==='price-asc'?' selected':'')+'>Price: Low to High</option>'+
+        '<option value="price-desc"'+(st.sort==='price-desc'?' selected':'')+'>Price: High to Low</option>'+
+      '</select></label></div>'+
+      (list.length? '<div class="grid-p g3">'+list.map((p,i)=>productCard(p,{i})).join('')+'</div>'
+        : '<div class="empty"><h3 class="serif">Nothing matches.</h3><p>Adjust or clear the filters to see more of the collection.</p><a class="btn btn-solid btn-sm" href="#/shop">CLEAR FILTERS</a></div>')+
+    '</div></div></section>');
+};
+
+/* ============================================================
+   COLLECTIONS
+   ============================================================ */
+PAGES.collections = async function(){
+  const col = (slug,name,tag,desc) => '<a class="tile rv" style="--d:0s;aspect-ratio:16/9" href="#/collections/'+slug+'">'+imgTag(DB.categories.find(c=>c.slug===slug)?DB.categories.find(c=>c.slug===slug).image:IMG.campaign[2], name)+'<div class="veil"></div><div class="t"><span>'+esc(tag)+'</span><h3>'+esc(name)+'</h3><p style="font-size:12px;color:var(--on-dark-muted);margin-top:.3rem">'+esc(desc)+'</p></div></a>';
+  return chromeShell(
+  '<section class="page-hero"><div class="container-w"><div class="crumbs"><a href="#/">HOME</a> &nbsp;/&nbsp; COLLECTIONS</div><h1>Collections</h1></div></section>'+
+  '<section style="padding:0 0 4rem"><div class="container-w"><div class="tiles" style="grid-template-columns:1fr 1fr">'+
+    col('new-arrivals','New Arrivals','JUST IN','The latest from the atelier')+
+    col('oversized-t-shirts','Oversized T-Shirts','THE SIGNATURE','Volume with intent')+
+    col('streetwear','Streetwear','THE UNIFORM','Fleece, twill and hardware')+
+    col('premium-t-shirts','Premium T-Shirts','240–260 GSM','Heavyweight staples')+
+    col('essentials','Essentials','EVERYDAY','Foundations, refined')+
+    col('limited-edition','Limited Edition','NUMBERED','Few made, never repeated')+
+  '</div></div></section>');
+};
+PAGES.collection = async function(parsed){
+  const slug = parsed.params[0];
+  let name, tagline, list;
+  if (slug==='best-sellers'){ name='Best Sellers'; tagline='The pieces India keeps coming back for.'; list=DB.products.filter(p=>p.published&&p.tags.includes('bestseller')); }
+  else {
+    const c = DB.categories.find(x=>x.slug===slug);
+    if (!c) return PAGES['404']();
+    name=c.name; tagline=c.tagline;
+    if (slug==='new-arrivals') list = DB.products.filter(p=>p.published&&p.tags.includes('new'));
+    else if (slug==='limited-edition') list = DB.products.filter(p=>p.published&&(p.category==='limited-edition'||p.tags.includes('limited')));
+    else list = DB.products.filter(p=>p.published&&p.category===slug);
+  }
+  return chromeShell(
+  '<section class="page-hero"><div class="container-w">'+
+    '<div class="crumbs"><a href="#/">HOME</a> &nbsp;/&nbsp; <a href="#/collections">COLLECTIONS</a> &nbsp;/&nbsp; '+esc(name.toUpperCase())+'</div>'+
+    '<h1>'+esc(name)+'</h1><p class="sub" style="color:var(--muted);margin-top:.6rem">'+esc(tagline)+'</p></div></section>'+
+  '<section style="padding-bottom:4.5rem"><div class="container-w">'+
+    (list.length? '<div class="grid-p g3">'+list.map((p,i)=>productCard(p,{i})).join('')+'</div>'
+      : '<div class="empty"><h3 class="serif">Dropping soon.</h3><p>This collection is being prepared. Join the list to hear first.</p><a class="btn btn-solid btn-sm" href="#/shop">SHOP ALL</a></div>')+
+  '</div></section>');
+};
+</script>

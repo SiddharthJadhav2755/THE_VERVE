@@ -1,0 +1,229 @@
+<script>
+/* ============================================================
+   CART / CHECKOUT / PAYMENTS / ORDERS
+   ============================================================ */
+function appliedCoupon(){ return localStorage.getItem('verve_coupon') || ''; }
+function setAppliedCoupon(c){ if(c) localStorage.setItem('verve_coupon', c); else localStorage.removeItem('verve_coupon'); }
+
+/* ---------- CART DRAWER ---------- */
+function openCartDrawer(){
+  const calc = cartCalc(appliedCoupon());
+  const left = DB.settings.shipping.freeAbove - calc.subtotal;
+  const items = calc.items;
+  document.getElementById('cdrawer').innerHTML =
+  '<div class="drawer-h"><span class="t">Your Bag ('+cartCount()+')</span><button class="icon-btn" data-action="cart-close" aria-label="Close">'+svgIc('close')+'</button></div>'+
+  '<div class="drawer-b">'+
+    (items.length? (left>0? '<div class="notice" style="margin:1rem 0">Add <b>'+fmt(left)+'</b> more for free shipping.</div>' : '<div class="notice gold" style="margin:1rem 0">Your order ships free.</div>')+
+      items.map((i,idx)=>'<div class="c-item"><div class="img">'+(i.image? imgTag(i.image, i.name):'')+'</div>'+
+        '<div><div class="n">'+esc(i.name)+'</div><div class="v">'+esc(i.color)+' / '+esc(i.size)+'</div>'+
+        '<div style="margin-top:.55rem" class="qty"><button data-action="ci-qty" data-i="'+idx+'" data-d="-1" aria-label="Decrease">−</button><span class="q">'+i.qty+'</span><button data-action="ci-qty" data-i="'+idx+'" data-d="1" aria-label="Increase">+</button></div></div>'+
+        '<div style="text-align:right"><div class="p mono-nums">'+fmt(i.line)+'</div><button class="rm" data-action="ci-remove" data-i="'+idx+'" style="margin-top:.6rem">Remove</button></div></div>').join('')
+      : '<div class="empty" style="border:0;padding-top:3.5rem"><h3 class="serif">Your bag is empty.</h3><p>Fill it with pieces that carry weight.</p><button class="btn btn-solid btn-sm" data-action="cart-close" data-goto="#/shop">EXPLORE THE COLLECTION</button></div>')+
+  '</div>'+
+  (items.length? '<div class="drawer-f">'+
+    '<div class="sum-row"><span>Subtotal</span><span class="mono-nums">'+fmt(calc.subtotal)+'</span></div>'+
+    '<div class="sum-row" style="font-size:11px;color:var(--muted)"><span>Incl. GST</span><span class="mono-nums">'+fmt(calc.taxIncl)+'</span></div>'+
+    '<button class="btn btn-solid btn-block" style="margin-top:1rem" data-action="cart-close" data-goto="#/checkout">CHECKOUT · '+fmt(calc.total)+'</button>'+
+    '<button class="link-u" style="margin-top:.9rem;width:100%;text-align:center" data-action="cart-close" data-goto="#/cart">VIEW BAG</button></div>':'');
+  openDrawer('cdrawer');
+}
+
+/* ---------- CART PAGE ---------- */
+PAGES.cart = async function(){
+  const cp = appliedCoupon();
+  const calc = cartCalc(cp);
+  const items = calc.items;
+  let couponHtml;
+  if (calc.coupon){
+    const c = DB.coupons.find(x=>x.code===calc.coupon);
+    couponHtml = '<div class="coupon-applied"><span>✓ '+calc.coupon+' — '+esc(c?c.note:'applied')+'</span><button class="rm" data-action="coupon-remove">REMOVE</button></div>';
+  } else {
+    couponHtml = '<form class="coupon-row" data-form="coupon"><input name="code" placeholder="COUPON CODE" aria-label="Coupon code"><button class="btn btn-line btn-sm" type="submit">APPLY</button></form>'+
+      (calc.shipMsg? '<div style="font-size:11.5px;color:var(--burgundy);letter-spacing:.06em">'+esc(calc.shipMsg)+'</div>':'')+
+      '<div style="font-size:11px;color:var(--muted);margin-top:.5rem">Try demo codes: VERVE10 · FIRST200 · FREESHIP</div>';
+  }
+  return chromeShell(
+  '<section class="page-hero"><div class="container-w"><div class="crumbs"><a href="#/">HOME</a> &nbsp;/&nbsp; BAG</div><h1>Shopping Bag</h1></div></section>'+
+  '<section style="padding-bottom:4.5rem"><div class="container-w">'+
+  (items.length?
+    '<div class="cart-layout"><div>'+
+      items.map((i,idx)=>'<div class="c-item" style="grid-template-columns:110px 1fr auto">'+
+        '<div class="img" style="width:110px;height:140px">'+(i.image? imgTag(i.image,i.name):'')+'</div>'+
+        '<div><div class="n serif" style="font-size:21px">'+esc(i.name)+'</div>'+
+          '<div class="v">'+esc(i.color)+' / Size '+esc(i.size)+' · '+fmt(i.price)+' each</div>'+
+          '<div style="margin-top:.7rem" class="qty"><button data-action="ci-qty" data-i="'+idx+'" data-d="-1">−</button><span class="q">'+i.qty+'</span><button data-action="ci-qty" data-i="'+idx+'" data-d="1">+</button></div>'+
+          '<div style="margin-top:.7rem"><button class="rm" data-action="ci-remove" data-i="'+idx+'">REMOVE</button></div></div>'+
+        '<div style="text-align:right"><div style="font-size:20px"><span class="mono-nums">'+fmt(i.line)+'</span></div>'+
+          '<div style="font-size:10.5px;color:var(--muted);margin-top:.4rem">Incl. '+fmt(i.tax)+' GST</div></div></div>').join('')+
+      '<div style="display:flex;justify-content:space-between;margin-top:1.6rem;flex-wrap:wrap;gap:1rem"><a class="link-u" href="#/shop">← CONTINUE SHOPPING</a><span style="font-size:11px;color:var(--muted);letter-spacing:.14em">COUPONS & GIFTCARDS BELOW</span></div>'+
+    '</div>'+
+    '<aside class="panel" style="position:sticky;top:90px"><h3>Order Summary</h3>'+
+      couponHtml+
+      '<div style="margin-top:1rem">'+
+      '<div class="sum-row"><span>Subtotal</span><span class="mono-nums">'+fmt(calc.subtotal)+'</span></div>'+
+      (calc.discount? '<div class="sum-row" style="color:var(--burgundy)"><span>Discount ('+calc.coupon+')</span><span class="mono-nums">−'+fmt(calc.discount)+'</span></div>':'')+
+      '<div class="sum-row"><span>Shipping</span><span class="mono-nums">'+(calc.shipping===0?'<b style="color:#3E5C3A;font-weight:500">FREE</b>':fmt(calc.shipping))+'</span></div>'+
+      '<div class="sum-row" style="font-size:11.5px;color:var(--muted)"><span>Includes GST</span><span class="mono-nums">'+fmt(calc.taxIncl)+'</span></div>'+
+      '<div class="sum-row total"><span>Total</span><span class="mono-nums">'+fmt(calc.total)+'</span></div></div>'+
+      '<a class="btn btn-solid btn-block" style="margin-top:1.2rem" href="#/checkout">PROCEED TO CHECKOUT</a>'+
+      '<div style="display:flex;gap:1.6rem;justify-content:center;margin-top:1.1rem;font-size:10px;letter-spacing:.18em;color:var(--muted);text-transform:uppercase"><span>'+svgIc('shield')+' Secure payments</span><span>'+svgIc('return')+' 7-day returns</span></div>'+
+    '</aside></div>'
+  : '<div class="empty"><h3 class="serif">Your bag is empty.</h3><p>Fill it with pieces that carry weight.</p><a class="btn btn-solid btn-sm" href="#/shop">EXPLORE THE COLLECTION</a></div>')+
+  '</div></section>');
+};
+
+/* ---------- CHECKOUT ---------- */
+let CO = { step:1, method:'razorpay_upi' };
+PAGES.checkout = async function(){
+  const calc = cartCalc(appliedCoupon());
+  if (!calc.items.length) return chromeShell('<div class="container center" style="padding:6rem 0"><h1 style="font-size:2.4rem">Your bag is empty.</h1><p style="color:var(--muted);margin:1rem 0 2rem">Add pieces before checking out.</p><a class="btn btn-solid" href="#/shop">SHOP NOW</a></div>');
+  const u = currentUser();
+  const addr = u && u.addresses && u.addresses[0];
+  const v = (k, d) => esc(u ? (u[k]||d||'') : (d||''));
+  return chromeShell(
+  '<section style="padding:2.4rem 0 5rem"><div class="container" style="max-width:1080px">'+
+    '<div class="crumbs" style="font-size:10.5px;letter-spacing:.24em;text-transform:uppercase;color:var(--muted);margin-bottom:1.4rem"><a href="#/cart">BAG</a> &nbsp;/&nbsp; <b style="color:var(--ink);font-weight:500">CHECKOUT</b> &nbsp;/&nbsp; CONFIRMATION</div>'+
+    '<div class="cart-layout">'+
+    '<div><div class="panel" style="margin-bottom:1.4rem"><h3>Contact & Delivery</h3>'+
+      (u? '' : '<div class="notice" style="margin-bottom:1.2rem">Checking out as guest. <button class="mini-link" data-action="goto-account">Sign in</button> to use saved addresses.</div>')+
+      '<form data-form="checkout-details" novalidate>'+
+      '<div class="frow"><div class="field"><label>Full name</label><input name="name" value="'+v('name')+'" required><div class="err">Enter your name</div></div>'+
+      '<div class="field"><label>Email</label><input name="email" type="email" value="'+v('email')+'" required><div class="err">Enter a valid email</div></div></div>'+
+      '<div class="frow"><div class="field"><label>Mobile number</label><input name="phone" inputmode="numeric" maxlength="10" value="'+esc(addr&&u? (u.phone||''):'')+'" required><div class="err">Enter a valid 10-digit Indian mobile</div></div>'+
+      '<div class="field"><label>House number</label><input name="line1" value="'+esc(addr?addr.line1:'')+'" required><div class="err">Required</div></div></div>'+
+      '<div class="field"><label>Street / Area</label><input name="area" value="'+esc(addr?addr.area:'')+'" required><div class="err">Required</div></div>'+
+      '<div class="frow"><div class="field"><label>City</label><input name="city" value="'+esc(addr?addr.city:'')+'" required><div class="err">Required</div></div>'+
+      '<div class="field"><label>State</label><input name="state" value="'+esc(addr?addr.state:'')+'" required><div class="err">Required</div></div></div>'+
+      '<div class="frow"><div class="field"><label>PIN code</label><input name="pin" inputmode="numeric" maxlength="6" value="'+esc(addr?addr.pin:'')+'" required><div class="err">Enter a valid 6-digit PIN</div></div>'+
+      '<div class="field"><label>Country</label><select name="country" class="inp"><option>India</option></select></div></div>'+
+      '<label style="display:flex;gap:.6rem;align-items:center;font-size:12.5px"><input type="checkbox" name="save" '+(u?'checked':'')+' style="accent-color:var(--burgundy)"> Save this address to my account</label>'+
+      '</form></div>'+
+      '<div class="panel"><h3>Payment</h3>'+
+        '<div class="notice" style="margin-bottom:1rem"><b>Demo gateway:</b> payments run through a simulated Razorpay checkout for this build — see docs for the production integration with server-side verification and webhooks.</div>'+
+        '<div class="pay-opts">'+
+        '<div class="pay-opt'+(CO.method==='razorpay_upi'?' on':'')+'" data-action="co-method" data-m="razorpay_upi"><span class="r"></span><div><b>UPI</b><small>GPay · PhonePe · Paytm — via Razorpay</small></div><span class="tagr badge b-ghost-dark">INSTANT</span></div>'+
+        '<div class="pay-opt'+(CO.method==='razorpay_card'?' on':'')+'" data-action="co-method" data-m="razorpay_card"><span class="r"></span><div><b>Credit / Debit Cards</b><small>Visa, Mastercard, RuPay, Amex</small></div></div>'+
+        '<div class="pay-opt'+(CO.method==='razorpay_netbanking'?' on':'')+'" data-action="co-method" data-m="razorpay_netbanking"><span class="r"></span><div><b>Net Banking</b><small>All major Indian banks</small></div></div>'+
+        '<div class="pay-opt'+(CO.method==='razorpay_wallet'?' on':'')+'" data-action="co-method" data-m="razorpay_wallet"><span class="r"></span><div><b>Digital Wallets</b><small>Paytm, Mobikwik, Freecharge</small></div></div>'+
+        '<div class="pay-opt'+(CO.method==='cod'?' on':'')+'" data-action="co-method" data-m="cod"><span class="r"></span><div><b>Cash on Delivery</b><small>₹'+DB.settings.shipping.codFee+' handling fee · pay at your door</small></div><span class="tagr badge b-line">COD</span></div>'+
+        '</div></div></div>'+
+    '<aside class="panel" style="position:sticky;top:90px"><h3>Your Order</h3>'+
+      calc.items.map(i=>'<div style="display:flex;gap:.9rem;padding:.55rem 0;border-bottom:1px dashed var(--line)"><div style="width:52px;height:66px;flex:none">'+(i.image? imgTag(i.image,i.name):'')+'</div><div style="flex:1;font-size:12.5px"><div style="font-family:var(--serif);font-size:14.5px">'+esc(i.name)+'</div><div style="color:var(--muted)">'+esc(i.color)+' / '+esc(i.size)+' × '+i.qty+'</div></div><div style="font-size:13px" class="mono-nums">'+fmt(i.line)+'</div></div>').join('')+
+      '<div style="margin-top:.9rem">'+
+      '<div class="sum-row"><span>Subtotal</span><span class="mono-nums">'+fmt(calc.subtotal)+'</span></div>'+
+      (calc.discount? '<div class="sum-row" style="color:var(--burgundy)"><span>Discount ('+calc.coupon+')</span><span class="mono-nums">−'+fmt(calc.discount)+'</span></div>':'')+
+      '<div class="sum-row"><span>Shipping</span><span class="mono-nums">'+(calc.shipping===0?'<b style="color:#3E5C3A;font-weight:500">FREE</b>':fmt(calc.shipping))+'</span></div>'+
+      (CO.method==='cod'? '<div class="sum-row"><span>COD fee</span><span class="mono-nums">'+fmt(DB.settings.shipping.codFee)+'</span></div>':'')+
+      '<div class="sum-row" style="font-size:11.5px;color:var(--muted)"><span>Includes GST</span><span class="mono-nums">'+fmt(calc.taxIncl)+'</span></div>'+
+      '<div class="sum-row total"><span>Payable</span><span class="mono-nums" id="co-total">'+fmt(calc.total+(CO.method==='cod'?DB.settings.shipping.codFee:0))+'</span></div></div>'+
+      '<button class="btn btn-solid btn-block" style="margin-top:1.2rem" data-action="co-place">'+(CO.method==='cod'?'PLACE ORDER':'PAY SECURELY')+'</button>'+
+      '<p style="font-size:10.5px;color:var(--muted);margin-top:.8rem;text-align:center;letter-spacing:.06em">256-bit TLS · PCI-DSS gateway · server-side verification</p>'+
+    '</aside></div></div></section>');
+};
+
+/* ---------- PAYMENT (simulated Razorpay checkout) ---------- */
+function openPayModal(calc, details){
+  const total = calc.total + (CO.method==='cod'?0:0);
+  const tabs = [['razorpay_upi','UPI'],['razorpay_card','Card'],['razorpay_netbanking','Net Banking'],['razorpay_wallet','Wallet']];
+  openModal(
+   '<div class="head"><div><div style="font-size:10px;letter-spacing:.3em;color:var(--muted);text-transform:uppercase">Amount payable</div><div class="amt mono-nums">'+fmt(calc.total)+'</div></div>'+
+   '<div style="text-align:right"><span class="badge b-dark">RAZORPAY</span><div style="font-size:9.5px;color:var(--muted);letter-spacing:.16em;margin-top:.3rem">DEMO CHECKOUT</div></div></div>'+
+   '<div class="demo-flag">'+svgIc('shield')+' Simulated gateway — no real money moves in this build</div>'+
+   '<div class="pay-tabs">'+tabs.map(t=>'<button class="chip'+(CO.method===t[0]?' on':'')+'" data-action="pay-tab" data-m="'+t[0]+'">'+t[1]+'</button>').join('')+'</div>'+
+   '<div id="pay-body">'+payMethodBody(CO.method)+'</div>'+
+   '<button class="btn btn-burgundy btn-block" style="margin-top:1.3rem" data-action="pay-now">PAY '+fmt(calc.total)+'</button>'+
+   '<button class="mini-link" style="margin-top:.9rem;width:100%;text-align:center" data-action="pay-fail">SIMULATE PAYMENT FAILURE (TEST)</button>', true);
+}
+function payMethodBody(m){
+  if (m==='razorpay_upi') return '<div class="upi-field"><span style="letter-spacing:.2em;color:var(--muted);font-size:12px">@UPI ID</span><input id="pay-vpa" placeholder="yourname@okhdfcbank" style="flex:1;border:0;background:transparent;outline:none;letter-spacing:.06em"></div><p style="font-size:11px;color:var(--muted);margin-top:.5rem">A collect request would be sent to this VPA.</p>';
+  if (m==='razorpay_card') return '<div class="field"><label>Card number</label><input id="pay-card" inputmode="numeric" placeholder="4111 1111 1111 1111" maxlength="19"></div><div class="frow"><div class="field"><label>Expiry</label><input id="pay-exp" placeholder="MM/YY" maxlength="5"></div><div class="field"><label>CVV</label><input id="pay-cvv" type="password" inputmode="numeric" maxlength="3" placeholder="•••"></div></div><p style="font-size:11px;color:var(--muted)">Card data never touches our servers — tokenised by the gateway.</p>';
+  if (m==='razorpay_netbanking') return '<div class="field"><label>Choose bank</label><select id="pay-bank" class="inp"><option>HDFC Bank</option><option>ICICI Bank</option><option>State Bank of India</option><option>Axis Bank</option><option>Kotak Mahindra</option></select></div><p style="font-size:11px;color:var(--muted)">You would be redirected to your bank\'s page.</p>';
+  if (m==='razorpay_wallet') return '<div class="field"><label>Choose wallet</label><select id="pay-wallet" class="inp"><option>Paytm Wallet</option><option>Mobikwik</option><option>Freecharge</option><option>Amazon Pay</option></select></div>';
+  return '';
+}
+async function payNowSucceeded(calc, details){
+  const method = CO.method;
+  const isCOD = false;
+  return createOrder(calc, details, { method, status:'Paid', verified:true });
+}
+async function createOrder(calc, details, pay){
+  const isCOD = pay.method==='cod';
+  const no = 'TV-' + new Date().toISOString().slice(2,10).replace(/-/g,'') + '-' + Math.random().toString(36).slice(2,6).toUpperCase();
+  const u = currentUser();
+  const codFee = isCOD? DB.settings.shipping.codFee : 0;
+  const status = isCOD ? 'Order Placed' : 'Payment Confirmed';
+  const order = {
+    no, invoice:'INV-'+no.slice(3), demo:false,
+    userId: u? u.id : null,
+    name: details.name, email: details.email, phone: details.phone,
+    address: { line1:details.line1, area:details.area, city:details.city, state:details.state, pin:details.pin, country:details.country||'India' },
+    items: calc.items.map(i=>({ pid:i.pid, slug:i.slug, name:i.name, color:i.color, size:i.size, qty:i.qty, price:i.price })),
+    subtotal: calc.subtotal, discount: calc.discount, coupon: calc.coupon,
+    shipping: calc.shipping, codFee, total: calc.total + codFee,
+    payment: { method: isCOD?'cod':'razorpay', subMethod: pay.method, status: isCOD?'COD Pending':'Paid', id: isCOD? '' : 'pay_'+uid('d').toUpperCase().slice(0,16), paidAt: isCOD? null : new Date().toISOString(), verified: isCOD? true : pay.verified },
+    status, awb:'', timeline: isCOD? [{status:'Order Placed',at:new Date().toISOString()}] : [{status:'Order Placed',at:new Date().toISOString()},{status:'Payment Confirmed',at:new Date().toISOString()}],
+    createdAt:new Date().toISOString(), updatedAt:new Date().toISOString()
+  };
+  // decrement inventory per variant (in production: row-level SQL transaction)
+  order.items.forEach(i=>{ setStock(i.pid, i.color, i.size, stockOf(i.pid,i.color,i.size)-i.qty); });
+  if (calc.coupon){ const c=DB.coupons.find(x=>x.code===calc.coupon); if(c) c.used++; setAppliedCoupon(''); }
+  DB.orders.unshift(order);
+  if (u && details.saveAddr && u.addresses){ if(!u.addresses.length) u.addresses.push({ id:uid('adr'), label:'Home', ...order.address }); }
+  sendEmail('orderConfirmation', order.email, order);
+  DB.carts[cartId()] = { items:[], updatedAt:new Date().toISOString(), email:order.email };
+  trackEvent('purchase', { value: order.total, currency:'INR', order_id: order.no });
+  saveDB();
+  return order;
+}
+
+/* ---------- ORDER CONFIRMATION ---------- */
+PAGES.orderConfirmation = async function(parsed){
+  const o = DB.orders.find(x=>x.no===parsed.params[0]);
+  if (!o) return PAGES['404']();
+  const mail = DB.emails.find(e=>e.kind==='orderConfirmation' && e.to===o.email && e.html.includes(o.no));
+  return chromeShell(
+  '<section style="padding:3.4rem 0 5rem"><div class="container" style="max-width:760px">'+
+    '<div class="pay-success"><div class="tick">'+svgIc('check')+'</div>'+
+    '<div class="eyebrow">ORDER '+esc(o.no)+'</div>'+
+    '<h1 style="font-size:clamp(2.2rem,5vw,3.6rem);margin:.7rem 0">Thank you, '+esc(o.name.split(' ')[0])+'.</h1>'+
+    '<p style="color:var(--muted);max-width:46ch;margin:0 auto 2rem">Your order is confirmed'+(o.payment.method==='razorpay'?' and payment was verified on the server':' (Cash on Delivery)')+'. A confirmation email is on its way to <b style="font-weight:500;color:var(--ink)">'+esc(o.email)+'</b>.</p></div>'+
+    '<div class="panel"><h3>Order Summary</h3>'+
+      o.items.map(i=>'<div style="display:flex;justify-content:space-between;font-size:13.5px;padding:.5rem 0;border-bottom:1px dashed var(--line)"><span>'+esc(i.name)+' — '+esc(i.color)+' / '+esc(i.size)+' × '+i.qty+'</span><span class="mono-nums">'+fmt(i.price*i.qty)+'</span></div>').join('')+
+      '<div class="sum-row" style="margin-top:.8rem"><span>Subtotal</span><span class="mono-nums">'+fmt(o.subtotal)+'</span></div>'+
+      (o.discount? '<div class="sum-row" style="color:var(--burgundy)"><span>Discount</span><span class="mono-nums">−'+fmt(o.discount)+'</span></div>':'')+
+      '<div class="sum-row"><span>Shipping'+(o.codFee?' + COD fee':'')+'</span><span class="mono-nums">'+fmt(o.shipping+o.codFee)+'</span></div>'+
+      '<div class="sum-row total"><span>Paid'+(o.payment.method==='cod'?' on delivery':'')+'</span><span class="mono-nums">'+fmt(o.total)+'</span></div>'+
+      '<div style="margin-top:1.1rem;font-size:12.5px;color:var(--muted)">Delivering to: '+esc(o.address.line1)+', '+esc(o.address.area)+', '+esc(o.address.city)+', '+esc(o.address.state)+' — '+esc(o.address.pin)+'</div>'+
+      (o.payment.id? '<div style="font-size:11px;color:var(--muted);margin-top:.4rem">Payment ID: '+esc(o.payment.id)+' · '+(o.payment.verified?'server-verified ✓':'')+'</div>':'')+
+      '<div style="display:flex;gap:.8rem;margin-top:1.4rem;flex-wrap:wrap"><a class="btn btn-solid btn-sm" href="#/track-order?no='+o.no+'">TRACK ORDER</a><a class="btn btn-line btn-sm" href="#/invoice/'+o.no+'">VIEW INVOICE</a>'+(mail?'<button class="btn btn-line btn-sm" data-action="view-email" data-id="'+mail.id+'">EMAIL PREVIEW</button>':'')+'</div>'+
+    '</div></div></section>');
+};
+
+/* ---------- INVOICE (printable) ---------- */
+PAGES.invoice = async function(parsed){
+  const o = DB.orders.find(x=>x.no===parsed.params[0]);
+  if (!o) return PAGES['404']();
+  const tax = o.items.reduce((s,i)=>s+lineTaxIncluded(i.price).included*i.qty,0);
+  return chromeShell(
+  '<section style="padding:2.5rem 0 5rem"><div class="container" style="max-width:800px">'+
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1.4rem"><div class="crumbs" style="margin:0"><a href="#/account/orders">ACCOUNT</a> &nbsp;/&nbsp; INVOICE</div><button class="btn btn-line btn-sm" data-action="print-invoice">PRINT / SAVE PDF</button></div>'+
+    '<div class="panel" style="background:#fff" id="invoice-sheet">'+
+      '<div style="display:flex;justify-content:space-between;border-bottom:2px solid var(--choco);padding-bottom:1.2rem">'+
+        '<div><div style="font-family:var(--serif);letter-spacing:.3em;font-size:22px">THE VERVE</div><div style="font-size:9px;letter-spacing:.4em;color:var(--burgundy)">DEFINE YOUR PRESENCE.</div></div>'+
+        '<div style="text-align:right;font-size:12px"><b style="letter-spacing:.2em">TAX INVOICE</b><br>No. '+esc(o.invoice)+'<br>'+dFmt(o.createdAt)+'</div></div>'+
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin:1.2rem 0;font-size:12.5px">'+
+        '<div><b style="font-size:10px;letter-spacing:.22em;color:var(--muted)">BILLED TO</b><br>'+esc(o.name)+'<br>'+esc(o.email)+'<br>'+esc(o.phone||'')+'</div>'+
+        '<div><b style="font-size:10px;letter-spacing:.22em;color:var(--muted)">DELIVERY ADDRESS</b><br>'+esc(o.address.line1)+', '+esc(o.address.area)+'<br>'+esc(o.address.city)+', '+esc(o.address.state)+' — '+esc(o.address.pin)+'</div></div>'+
+      '<table class="tbl"><thead><tr><th>ITEM</th><th>SIZE / COLOUR</th><th style="text-align:right">QTY</th><th style="text-align:right">RATE</th><th style="text-align:right">AMOUNT</th></tr></thead><tbody>'+
+        o.items.map(i=>'<tr><td>'+esc(i.name)+'<br><span style="color:var(--muted);font-size:10.5px">SKU '+(DB.products.find(p=>p.id===i.pid)||{sku:'—'}).sku+'</span></td><td>'+esc(i.size)+' / '+esc(i.color)+'</td><td style="text-align:right">'+i.qty+'</td><td style="text-align:right" class="mono-nums">'+fmt(i.price)+'</td><td style="text-align:right" class="mono-nums">'+fmt(i.price*i.qty)+'</td></tr>').join('')+
+      '</tbody></table>'+
+      '<div style="max-width:300px;margin-left:auto;margin-top:1rem;font-size:12.5px">'+
+        '<div class="sum-row"><span>Subtotal</span><span class="mono-nums">'+fmt(o.subtotal)+'</span></div>'+
+        (o.discount? '<div class="sum-row"><span>Discount ('+esc(o.coupon)+')</span><span class="mono-nums">−'+fmt(o.discount)+'</span></div>':'')+
+        '<div class="sum-row"><span>Shipping'+(o.codFee?' + COD':'')+'</span><span class="mono-nums">'+fmt(o.shipping+o.codFee)+'</span></div>'+
+        '<div class="sum-row" style="font-size:11px;color:var(--muted)"><span>Incl. GST (5%/12% slabs)</span><span class="mono-nums">'+fmt(tax)+'</span></div>'+
+        '<div class="sum-row total"><span>Grand Total</span><span class="mono-nums">'+fmt(o.total)+'</span></div></div>'+
+      '<div style="border-top:1px solid var(--line);margin-top:1.2rem;padding-top:.9rem;font-size:11px;color:var(--muted);display:flex;justify-content:space-between;flex-wrap:wrap;gap:.6rem"><span>Payment: '+esc((o.payment.method==='razorpay'?'Razorpay — ':'COD — ')+o.payment.status)+(o.payment.id?' ('+esc(o.payment.id)+')':'')+'</span><span>This is a system-generated invoice (demo).</span></div>'+
+    '</div></div></section>');
+};
+</script>
