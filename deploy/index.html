@@ -131,6 +131,9 @@ h1,h2,h3,.serif{font-family:var(--serif);font-weight:500;line-height:1.12;letter
 .drawer{position:fixed;top:0;bottom:0;right:0;width:min(430px,94vw);background:var(--paper);z-index:85;transform:translateX(102%);transition:transform .45s var(--ease);display:flex;flex-direction:column;box-shadow:var(--sh)}
 .drawer.on{transform:none}
 .drawer.left{right:auto;left:0;transform:translateX(-102%);width:min(360px,88vw)}
+/* .left defined after .on with equal specificity would pin the menu off-screen
+   forever — the open state must win over the closed state, so it is restated last */
+.drawer.left.on{transform:none}
 .drawer-h{display:flex;align-items:center;justify-content:space-between;padding:1.3rem 1.6rem;border-bottom:1px solid var(--line)}
 .drawer-h .t{font-size:11px;letter-spacing:.3em;text-transform:uppercase;font-weight:500}
 .icon-btn{display:inline-flex;padding:.45rem;opacity:.75;transition:opacity .2s}
@@ -663,6 +666,14 @@ const VERVE_CONFIG = {
      order_total/track_link, then paste the three IDs here. Empty = confirmations stay queued
      for one-click sending from Admin → Notifications (mailto/wa.me). */
   emailjs: { serviceId:'', templateId:'', publicKey:'' },
+  /* ---------- REAL BACKEND (Supabase Postgres) — customer orders land in your hosted
+     database. Setup (~10 min, free): supabase.com → New project → SQL Editor → paste
+     the-verve-docs/orders-backend.sql → Run → copy the Project URL + anon public key
+     (Project Settings → API) into the two fields below → bash build.sh → redeploy.
+     Full guide: the-verve-docs/going-live.md. The anon key is PUBLIC by design — the
+     orders table allows INSERT only (row-level security), so nobody can read your
+     orders through it. NEVER put the service_role key in this file. */
+  backend: { supabaseUrl: '', supabaseAnonKey: '', ordersTable: 'orders' },
   contact: { email: 'jadhavsiddharth576@gmail.com', phone: '+91 90000 00000', hours: 'Mon–Sat, 10:00–18:00 IST' }
 };
 
@@ -2072,13 +2083,25 @@ PAGES.cart = async function(){
 };
 
 /* ---------- CHECKOUT ---------- */
-let CO = { step:1, method:'razorpay_upi' };
+let CO = { step:1, method:'razorpay_upi', draft:null };
+/* Draft preservation: picking a payment method re-renders this page — without the
+   draft, every field the customer typed is wiped. Harvest before re-render. */
+function coHarvestDraft(){
+  const f = document.querySelector('form[data-form="checkout-details"]');
+  if(!f) return;
+  CO.draft = CO.draft || {};
+  [].slice.call(f.querySelectorAll('input[name],select[name]')).forEach(function(el){
+    CO.draft[el.name] = el.type==='checkbox' ? el.checked : el.value;
+  });
+}
 PAGES.checkout = async function(){
   const calc = cartCalc(appliedCoupon());
   if (!calc.items.length) return chromeShell('<div class="container center" style="padding:6rem 0"><h1 style="font-size:2.4rem">Your bag is empty.</h1><p style="color:var(--muted);margin:1rem 0 2rem">Add pieces before checking out.</p><a class="btn btn-solid" href="#/shop">SHOP NOW</a></div>');
   const u = currentUser();
   const addr = u && u.addresses && u.addresses[0];
   const v = (k, d) => esc(u ? (u[k]||d||'') : (d||''));
+  const D = CO.draft || {};
+  const dv = (k, fb) => esc(D[k] !== undefined ? D[k] : (fb||''));
   return chromeShell(
   '<section style="padding:2.4rem 0 5rem"><div class="container" style="max-width:1080px">'+
     '<div class="crumbs" style="font-size:10.5px;letter-spacing:.24em;text-transform:uppercase;color:var(--muted);margin-bottom:1.4rem"><a href="#/cart">BAG</a> &nbsp;/&nbsp; <b style="color:var(--ink);font-weight:500">CHECKOUT</b> &nbsp;/&nbsp; CONFIRMATION</div>'+
@@ -2086,16 +2109,16 @@ PAGES.checkout = async function(){
     '<div><div class="panel" style="margin-bottom:1.4rem"><h3>Contact & Delivery</h3>'+
       (u? '' : '<div class="notice" style="margin-bottom:1.2rem">Checking out as guest. <button class="mini-link" data-action="goto-account">Sign in</button> to use saved addresses.</div>')+
       '<form data-form="checkout-details" novalidate>'+
-      '<div class="frow"><div class="field"><label>Full name</label><input name="name" value="'+v('name')+'" required><div class="err">Enter your name</div></div>'+
-      '<div class="field"><label>Email</label><input name="email" type="email" value="'+v('email')+'" required><div class="err">Enter a valid email</div></div></div>'+
-      '<div class="frow"><div class="field"><label>Mobile number</label><input name="phone" inputmode="numeric" maxlength="10" value="'+esc(addr&&u? (u.phone||''):'')+'" required><div class="err">Enter a valid 10-digit Indian mobile</div></div>'+
-      '<div class="field"><label>House number</label><input name="line1" value="'+esc(addr?addr.line1:'')+'" required><div class="err">Required</div></div></div>'+
-      '<div class="field"><label>Street / Area</label><input name="area" value="'+esc(addr?addr.area:'')+'" required><div class="err">Required</div></div>'+
-      '<div class="frow"><div class="field"><label>City</label><input name="city" value="'+esc(addr?addr.city:'')+'" required><div class="err">Required</div></div>'+
-      '<div class="field"><label>State</label><input name="state" value="'+esc(addr?addr.state:'')+'" required><div class="err">Required</div></div></div>'+
-      '<div class="frow"><div class="field"><label>PIN code</label><input name="pin" inputmode="numeric" maxlength="6" value="'+esc(addr?addr.pin:'')+'" required><div class="err">Enter a valid 6-digit PIN</div></div>'+
+      '<div class="frow"><div class="field"><label>Full name</label><input name="name" value="'+dv('name', u? u.name||'' : '')+'" required><div class="err">Enter your name</div></div>'+
+      '<div class="field"><label>Email</label><input name="email" type="email" value="'+dv('email', u? u.email||'' : '')+'" required><div class="err">Enter a valid email</div></div></div>'+
+      '<div class="frow"><div class="field"><label>Mobile number</label><input name="phone" inputmode="numeric" maxlength="10" value="'+dv('phone', addr&&u? (u.phone||''):'')+'" required><div class="err">Enter a valid 10-digit Indian mobile</div></div>'+
+      '<div class="field"><label>House number</label><input name="line1" value="'+dv('line1', addr?addr.line1:'')+'" required><div class="err">Required</div></div></div>'+
+      '<div class="field"><label>Street / Area</label><input name="area" value="'+dv('area', addr?addr.area:'')+'" required><div class="err">Required</div></div>'+
+      '<div class="frow"><div class="field"><label>City</label><input name="city" value="'+dv('city', addr?addr.city:'')+'" required><div class="err">Required</div></div>'+
+      '<div class="field"><label>State</label><input name="state" value="'+dv('state', addr?addr.state:'')+'" required><div class="err">Required</div></div></div>'+
+      '<div class="frow"><div class="field"><label>PIN code</label><input name="pin" inputmode="numeric" maxlength="6" value="'+dv('pin', addr?addr.pin:'')+'" required><div class="err">Enter a valid 6-digit PIN</div></div>'+
       '<div class="field"><label>Country</label><select name="country" class="inp"><option>India</option></select></div></div>'+
-      '<label style="display:flex;gap:.6rem;align-items:center;font-size:12.5px"><input type="checkbox" name="save" '+(u?'checked':'')+' style="accent-color:var(--burgundy)"> Save this address to my account</label>'+
+      '<label style="display:flex;gap:.6rem;align-items:center;font-size:12.5px"><input type="checkbox" name="save" '+(D.save!==undefined? (D.save?'checked':'') : (u?'checked':''))+' style="accent-color:var(--burgundy)"> Save this address to my account</label>'+
       '</form></div>'+
       '<div class="panel"><h3>Payment</h3>'+
         '<div class="notice" style="margin-bottom:1rem"><b>Demo gateway:</b> payments run through a simulated Razorpay checkout for this build — see docs for the production integration with server-side verification and webhooks.</div>'+
@@ -2191,6 +2214,27 @@ function pushOrderToSheets(o){
   }catch(e){ console.warn('sheet push failed', e); }
 }
 
+/* ---------- CLOUD ORDER BACKEND (Supabase Postgres — see going-live.md) ----------
+   Every checkout posts the order as a row into the owner's `orders` table over the
+   Supabase REST API. The anon key is public by design; row-level security allows
+   INSERT only. client_id = order number + merge-duplicates makes retries idempotent.
+   Fire-and-forget: the order is always saved locally first, cloud push never blocks
+   or breaks checkout (offline orders keep working and sync on the next one). */
+function cloudReady(){ const b = VERVE_CONFIG.backend||{}; return !!(b.supabaseUrl && b.supabaseAnonKey); }
+async function pushOrderToCloud(o){
+  const b = VERVE_CONFIG.backend||{};
+  if(!(b.supabaseUrl && b.supabaseAnonKey)) return false;
+  const url = b.supabaseUrl.replace(/\/+$/,'') + '/rest/v1/' + (b.ordersTable||'orders');
+  try{
+    const r = await fetch(url, { method:'POST',
+      headers:{ 'Content-Type':'application/json', 'apikey': b.supabaseAnonKey, 'Prefer':'resolution=merge-duplicates,return=minimal' },
+      body: JSON.stringify([{ client_id:o.no, name:o.name, phone:o.phone, email:o.email, city:o.address.city, state:o.address.state,
+        payment_mode:o.payment.method, payment_status:o.payment.status,
+        items_qty:o.items.reduce(function(s,i){ return s+i.qty; },0), total:o.total, items:o.items, status:o.status, raw:o }]) });
+    return r.ok;
+  }catch(e){ console.warn('cloud order push failed', e); return false; }
+}
+
 /* ---------- ORDER CONFIRMATION AUTOMATION (email + WhatsApp) ---------- */
 function waNumber(raw){ let n=(raw||'').replace(/\D/g,''); if(n.length===10) n='91'+n; return n; }
 function maskPhone(raw){ const p=(raw||'').replace(/\D/g,'').replace(/^91/,''); return p.length>=10? '+91 '+p.slice(0,2)+'•• ••• '+p.slice(-2) : (raw||'—'); }
@@ -2271,6 +2315,8 @@ async function createOrder(calc, details, pay){
     if (ok){ DB.notifs.filter(function(n){ return n.orderNo===order.no && n.kind==='email'; }).forEach(function(n){ n.status='sent'; n.via='emailjs'; n.sentAt=new Date().toISOString(); }); saveDB(); }
   });
   pushOrderToSheets(order);
+  pushOrderToCloud(order);   // fire-and-forget: lands in your Supabase orders table when the backend is configured
+  CO.draft = null; CO.details = null;   // fresh form for the next checkout
   DB.carts[cartId()] = { items:[], updatedAt:new Date().toISOString(), email:order.email };
   trackEvent('purchase', { value: order.total, currency:'INR', order_id: order.no });
   saveDB();
@@ -2871,6 +2917,15 @@ ADM.settings = function(){
     '<div class="frow"><div class="field"><label>Supabase project URL — live sync between laptop & phone (README "Live sync across devices")</label><input name="supabaseUrl" class="inp" value="'+esc((DB.settings.integrations||{}).supabaseUrl||'')+'" placeholder="https://xxxx.supabase.co"></div>'+
     '<div class="field"><label>Supabase anon key</label><input name="supabaseKey" class="inp" value="'+esc((DB.settings.integrations||{}).supabaseKey||'')+'" placeholder="eyJ…"></div></div>'+
     '<button class="btn btn-solid btn-sm">SAVE INTEGRATIONS</button><p style="font-size:11px;color:var(--muted);margin-top:.7rem">Leave empty = off (Export/Import still works). Stored only in this browser.</p></form></div>'+
+  '<div class="adm-card"><h3>Cloud order backend — real database (Supabase)</h3>'+
+    (cloudReady()
+      ? '<div class="notice" style="margin-bottom:.8rem"><b>ON.</b> Every customer checkout writes straight into your Supabase <b>orders</b> table — from any device, live. Read and manage orders in the free Supabase dashboard: <b>supabase.com → Table Editor → orders</b> (works on your phone). Statuses you set there are the source of truth for fulfilment; they do not flow back into this board automatically yet.</div>'+
+        '<div style="display:flex;gap:.8rem;flex-wrap:wrap"><button class="btn btn-line btn-sm" data-action="intg-test-cloud">SEND TEST ORDER TO CLOUD</button>'+
+        '<button class="btn btn-line btn-sm" data-action="intg-open-cloud">OPEN SUPABASE TABLE</button></div>'
+      : '<div class="notice gold" style="margin-bottom:.8rem"><b>NOT CONFIGURED.</b> Customer orders currently live only in each customer browser. Connect the free cloud backend in about 10 minutes: create a Supabase project → run the-verve-docs/orders-backend.sql in its SQL Editor → put the Project URL + anon key into VERVE_CONFIG.backend in 02-data.part → bash build.sh → redeploy. Full steps: the-verve-docs/going-live.md.</div>'+
+        '<div style="display:flex;gap:.8rem;flex-wrap:wrap"><button class="btn btn-line btn-sm" data-action="intg-test-cloud">SEND TEST ORDER TO CLOUD</button></div>'+
+        '<p style="font-size:11px;color:var(--muted);margin-top:.7rem">The test sends one row marked TEST — safe to delete in the dashboard.</p>')+
+  '</div>'+
   '<div class="adm-card" style="border-color:var(--burgundy)"><h3 style="color:var(--burgundy)">Danger zone</h3>'+
     '<p style="font-size:12.5px;color:var(--muted);margin-bottom:.7rem"><b style="color:var(--ink)">Empty store — start from zero.</b> Deletes every product, order, customer, review, subscriber, coupon and email log. Keeps your admin login, settings, categories and hero image. Use this when you are ready to sell for real.</p>'+
     '<button class="btn btn-burgundy btn-sm" data-action="adm-empty" style="margin-bottom:1.2rem">EMPTY STORE — START FROM ZERO</button>'+
@@ -3092,6 +3147,12 @@ async function runTests(){
     const r2 = await doRegister('Test Again','dup@example.com','password123','');
     assert(r2.ok===false,'duplicate must be rejected');
   });
+  await t('Cloud backend config (optional — passes when unset)', async ()=>{
+    const B = VERVE_CONFIG.backend||{};
+    if(!(B.supabaseUrl && B.supabaseAnonKey)) return;   // no backend configured → nothing to check
+    assert(/^https:\/\/[a-z0-9]{10,30}\.supabase\.(co|com)\/?(\?.*)?$/.test(String(B.supabaseUrl).trim()),'supabaseUrl must look like https://abcdefghij.supabase.co');
+    assert(String(B.supabaseAnonKey).length>20,'anon key looks too short — copy the full anon public key from Supabase Project Settings → API');
+  });
   // restore
   DB = JSON.parse(snapshot); saveDB();
   if (_tok) localStorage.setItem(VERVE_CONFIG.tokenKey, _tok);
@@ -3213,6 +3274,24 @@ document.addEventListener('click', async e=>{
       setTimeout(function(){ render(); }, 900);
       break; }
     case 'adm-export': doExportData(); break;
+    case 'intg-test-cloud': {
+      const B = VERVE_CONFIG.backend||{};
+      if(!(B.supabaseUrl && B.supabaseAnonKey)){ toast('Cloud backend not configured — see the-verve-docs/going-live.md'); break; }
+      toast('Sending test order to Supabase…');
+      pushOrderToCloud({ no:'TEST-'+Date.now(), name:'Cloud Backend Test', email:'test@example.com', phone:'0000000000',
+        address:{ line1:'test', area:'test', city:'Mumbai', state:'MH', pin:'400001', country:'India' },
+        items:[{ pid:'test', slug:'test', name:'Backend test row', color:'—', size:'—', qty:1, price:0 }],
+        subtotal:0, discount:0, shipping:0, codFee:0, total:0,
+        payment:{ method:'test', status:'TEST', id:'', paidAt:null, verified:true },
+        status:'TEST — safe to delete', createdAt:new Date().toISOString() })
+        .then(function(ok){ toast(ok ? 'Test row sent — open supabase.com → Table Editor → orders' : 'Test failed — check the URL and key, and that orders-backend.sql was run'); });
+      break; }
+    case 'intg-open-cloud': {
+      const B2 = VERVE_CONFIG.backend||{};
+      const ref = (B2.supabaseUrl||'').match(/https:\/\/([a-z0-9]+)\.supabase\.(co|com)/);
+      if(ref){ window.open('https://supabase.com/dashboard/project/'+ref[1]+'/editor', '_blank'); }
+      else toast('Cloud backend not configured — see the-verve-docs/going-live.md');
+      break; }
     case 'adm-xlsx': exportOrdersXlsx(); break;
     case 'ci-qty': {
       const calc = cartCalc(appliedCoupon());
@@ -3225,7 +3304,7 @@ document.addEventListener('click', async e=>{
       if (CURRENT_ROUTE.route.page==='cart') render(); else openCartDrawer();
       break; }
     case 'coupon-remove': setAppliedCoupon(''); render(); break;
-    case 'co-method': CO.method = el.dataset.m; render(); break;
+    case 'co-method': coHarvestDraft(); CO.method = el.dataset.m; render(); break;
     case 'co-place': {
       const f = document.querySelector('[data-form="checkout-details"]');
       const d = Object.fromEntries(new FormData(f).entries());
